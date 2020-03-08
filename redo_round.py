@@ -898,15 +898,29 @@ starting_time = time.time() #-
 all_accur_valid = []  #-
 all_accur_final = []  #-
 all_average_loss = [[],[]] #-
-for round in range(10): #-
+
+rounds = 50 #-
+for round in range(rounds): #-
   # --- Architectural search parameters
+
+  # original parameters
+  # meta = {}
+  # meta['max_rs_iter'] = 10 # 10  # initial random search
+  # meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
+  # meta['num_neighbours'] = 8 # 16 
+  # meta['neighbour_range'] = 0.4  # 0.2  # mutation rate for stochastic hill-climbing
+  # meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
+  # meta['diff_lr'] = 0.5 # 0.1 # learning rate for differential search
+
+  # modified parameters
   meta = {}
-  meta['max_rs_iter'] = 10 # 10  # initial random search
+  meta['max_rs_iter'] = 20 # 10  # initial random search
   meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
   meta['num_neighbours'] = 8 # 16 
-  meta['neighbour_range'] = 0.4  # 0.2  # mutation rate for stochastic hill-climbing
-  meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
-  meta['diff_lr'] = 0.5 # 0.1 # learning rate for differential search
+  meta['neighbour_range'] = 0.2  # 0.2  # mutation rate for stochastic hill-climbing
+  meta['num_differential_sol'] = 8 # 8 # number of differential evolution solutions
+  meta['diff_lr'] = 0.2 # 0.1 # learning rate for differential search
+  meta['num_final_sol'] = 3 # number of final solutions to consider #-
 
   meta_rs_valids = []
   best_model = None
@@ -914,6 +928,7 @@ for round in range(10): #-
   best_model_accur = 0
 
   mat_chroms = [[0 for x in range(comp_num_chrom_param(limits)+1)] for y in range(meta['max_rs_iter'])] #-
+  best_few_res = [None for x in range(meta['num_final_sol'])]
 
   # Prepare model
   def prepare_model(a_rand_chrom):
@@ -961,10 +976,18 @@ for round in range(10): #-
       best_train_params = train_params
       best_chromosome = a_rand_chrom
 
+      for i in range(len(best_few_res)-1, 0, -1):
+        best_few_res[i] = best_few_res[i-1]
+      best_few_res[0] = (best_model_accur, best_chromosome, best_model, best_train_params)
+
     meta_rs_valids.append(best_valid_accur)
     mat_chroms[rsi][0] = best_valid_accur #-
     mat_chroms[rsi][1:] = a_rand_chrom #-
-
+  
+  while None in best_few_res:
+    ind = best_few_res.index(None)
+    best_few_res[ind] = best_few_res[ind-1]
+  
   mat_chroms = sorted(mat_chroms, reverse=True) #-
   print('*****************************************************{}'.format(round))
   print('Best accuracy after initial random search: {}'.format(best_model_accur))
@@ -1117,8 +1140,12 @@ for round in range(10): #-
     # use inverse function to change the level of impact of differential
     #  larger difference -> perceived as algorithm has not plateau-ed yet (has not reached local optima)
     #  smaller difference -> perceived as algorithm as reached local optima and needs more help to get out from it
-    average_of_chroms = np.mean(mat_chrom_accur[0:num_new_sol], axis=0)
+    # average_of_chroms = np.mean(mat_chrom_accur[0:num_new_sol], axis=0)
+    # difference_of_chroms = best_chrom - average_of_chroms[1:]
+    average_of_chroms = np.mean(mat_chrom_accur, axis=0)
     difference_of_chroms = best_chrom - average_of_chroms[1:]
+    # median_of_chroms = np.median(mat_chrom_accur, axis=0)
+    # difference_of_chroms = best_chrom - median_of_chroms[1:]
     # Scan through new solutions
     for si in range(num_new_sol):
       mutate_vec = np.divide(np.random.rand(num_chrom_params), difference_of_chroms)
@@ -1147,7 +1174,7 @@ for round in range(10): #-
     non_improvement_iters = 0
     for shci in range(meta['max_shc_iter']):
 
-      if shci <= (meta['max_shc_iter']/3) and non_improvement_iters > 3 or shci <= (meta['max_shc_iter']/3 * 2) and non_improvement_iters > 7:
+      if best_model_accur < 30.0 and non_improvement_iters > 3 or best_model_accur < 50.0 and non_improvement_iters > 5:
         initialize_again = True
         break
 
@@ -1167,7 +1194,19 @@ for round in range(10): #-
 
       if new_res[0] > best_res[0]:
         non_improvement_iters = 0 #-
-        best_res = new_res
+        best_res = new_res    # model
+        for i in range(len(best_few_res)-1, 0, -1): #-
+          best_few_res[i] = best_few_res[i-1] #-
+        best_few_res[0] = best_res  #-
+      else: #-
+        for i in range(len(best_few_res)):  #-
+          if new_res[0] > best_few_res[i][0]: #-
+            non_improvement_iters = 0 #-
+            for j in range(len(best_few_res)-1, i, -1): #-
+              best_few_res[j] = best_few_res[j-1] #-
+            best_few_res[i] = new_res #-
+            break #-
+      
       print('***********************************************{}'.format(round))
       print('Best accuracy after random mutation: {}'.format(new_res[0]))
       print('***********************************************')
@@ -1180,15 +1219,24 @@ for round in range(10): #-
       if new_res[0] > best_res[0]:
         non_improvement_iters = 0 #-
         best_res = new_res    # model
-        mat_chroms[1] = mat_chroms[0] #-
-        mat_chroms[0][0] = best_res[0]  #-
-        mat_chroms[0][1:] = best_res[1] #-
+        for i in range(len(best_few_res)-1, 0, -1): #-
+          best_few_res[i] = best_few_res[i-1] #-
+        best_few_res[0] = best_res  #-
+      else: #-
+        for i in range(len(best_few_res)):  #-
+          non_improvement_iters = 0 #-
+          if new_res[0] > best_few_res[i][0]: #-
+            for j in range(len(best_few_res)-1, i, -1): #-
+              best_few_res[j] = best_few_res[j-1] #-
+            best_few_res[i] = new_res #-
+            break #-
+      
       print('***********************************************{}'.format(round))
       print('Best accuracy after differential search: {}'.format(new_res[0]))
       print('***********************************************')
       
       non_improvement_iters += 1
-      
+
       mat_chroms = sorted(mat_chrom_acur.tolist(), reverse=True)
     
     if not initialize_again:
@@ -1242,28 +1290,56 @@ for round in range(10): #-
   print('Best accuracy so far: {}'.format(best_res[0]))
   print('======================================')
   print('Computing the final test ...')
-  best_model_accur, best_chromosome, best_model, best_train_params = best_res
-  final_model, best_valid_model, valid_accurs, train_accurs = do_training(best_model, best_train_params, args['num_epochs_test'])
+  # best_model_accur, best_chromosome, best_model, best_train_params = best_res
+  # final_model, best_valid_model, valid_accurs, train_accurs = do_training(best_model, best_train_params, args['num_epochs_test'])
+  
+  best_few_models = [i[2] for i in best_few_res]
+  best_few_train_params = [i[3] for i in best_few_res]
+
+  best_valid_accuracy = 0
+  best_final_model = None
+  best_validation_model = None
+  best_valid_accurs = []
+  best_train_accurs = []
+  best_training_params = []
+  for i in range(meta['num_final_sol']):
+    final_model, best_valid_model, valid_accurs, train_accurs = do_training(best_few_models[i], best_few_train_params[i], args['num_epochs_test'])
+    if max(valid_accurs) > best_valid_accuracy:
+      best_valid_accuracy = max(valid_accurs)
+      best_final_model = copy.deepcopy(final_model)
+      best_validation_model = copy.deepcopy(best_valid_model)
+      best_valid_accurs = valid_accurs
+      best_train_accurs = train_accurs
+      best_training_params = best_few_train_params[i]
+
+  # if random.random() < 0.333333:
+  #   training_res = best_few_res[1]
+  # else:
+  #   training_res = best_few_res[0]
+  
+  # best_model_accur, best_chromosome, best_model, best_training_params = training_res
+  # best_final_model, best_validation_model, best_valid_accurs, best_train_accurs = do_training(best_model, best_training_params, args['num_epochs_test'])
+
   print('=====================================')
   print('Training accuracies')
   print('=====================================')
-  print(train_accurs)
+  print(best_train_accurs)
   print('=====================================')
   print('Best training parameters')
   print('=====================================')
-  print(best_train_params)
+  print(best_training_params)
   print('=====================================')
   print('Best model')
   print('=====================================')
-  print(best_valid_model)
+  print(best_validation_model)
   print('=====================================')
   print('Test accuracies')
   print('=====================================')
   print('Model with best validation accuracy: ')
-  accur_valid, test_loss = final_test(best_valid_model)
+  accur_valid, test_loss = final_test(best_validation_model)
   all_average_loss[0].append(test_loss)  #-
   print('Model at the end of training: ')
-  accur_final, test_loss = final_test(final_model)
+  accur_final, test_loss = final_test(best_final_model)
   all_average_loss[1].append(test_loss)  #-
 
   # max_accur = int(max(accur_valid, accur_final))
@@ -1274,10 +1350,12 @@ for round in range(10): #-
   
 
 print("All valid accuracies: {}".format(all_accur_valid)) #-
-print("All final accuracies: {}".format(all_accur_final)) #-
-print("All average losses: {}".format(all_average_loss))  #-
-print("Best validatin accuracy after 10 rounds: {}".format(max(all_accur_valid))) #-
-print("Average validation accuracy for 10 rounds: {}".format(torch.mean(torch.stack(all_accur_valid)))) #-
+# print("All final accuracies: {}".format(all_accur_final)) #-
+# print("All average losses: {}".format(all_average_loss))  #-
+print("Best validation accuracy after {} rounds: {}".format(rounds, max(all_accur_valid))) #-
+print("Worst validation accuracy after {} rounds: {}".format(rounds, min(all_accur_valid))) #-
+print("Mean validation accuracy for {} rounds: {}".format(rounds, torch.mean(torch.stack(all_accur_valid)))) #-
+print("Median validation accuracy for {} rounds: {}".format(rounds, torch.median(torch.stack(all_accur_valid)))) #-
 print("Total time: {}".format((time.time()-starting_time))) #-
 
 
