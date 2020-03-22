@@ -895,8 +895,8 @@ all_accur_valid = []
 all_accur_final = []
 all_average_loss = [[],[]]
 
-rounds = 100
-for _ in range(rounds):
+trials = 100
+for _ in range(trials):
   # --- Architectural search parameters
   meta = {}
   meta['max_rs_iter'] = 10 # 10  # initial random search
@@ -1174,18 +1174,27 @@ for _ in range(rounds):
   all_accur_valid.append(accur_valid)
   all_accur_final.append(accur_final)
 
-print("All valid accuracies: {}".format([i.item() for i in all_accur_valid])) #-
-print("All final accuracies: {}".format([i.item() for i in all_accur_final])) #-
-# print("All average losses: {}".format(all_average_loss))  #-
-print("Best validation accuracy after {} rounds: {}".format(rounds, max(all_accur_valid))) #-
-print("Worst validation accuracy after {} rounds: {}".format(rounds, min(all_accur_valid))) #-
-print("Mean validation accuracy for {} rounds: {}".format(rounds, torch.mean(torch.stack(all_accur_valid)))) #-
-print("Median validation accuracy for {} rounds: {}".format(rounds, torch.median(torch.stack(all_accur_valid)))) #-
-print("Total time: {}".format((time.time()-starting_time))) #-
+valid_accuracies = [i.item() for i in all_accur_valid]
+final_accuracies = [i.item() for i in all_accur_final]
 
-fig = plt.figure()
-plt.errorbar(np.arange(rounds), all_accur_valid, yerr=np.array(all_average_loss[0]))
+# print("All average losses: {}".format(all_average_loss))
+# print("Best validation accuracy after {} trials: {}".format(trials, max(all_accur_valid)))
+# print("Worst validation accuracy after {} trials: {}".format(trials, min(all_accur_valid)))
+# print("Mean validation accuracy for {} trials: {}".format(trials, torch.mean(torch.stack(all_accur_valid))))
+# print("Median validation accuracy for {} trials: {}".format(trials, torch.median(torch.stack(all_accur_valid))))
 
+print("All valid accuracies: {}".format(valid_accuracies))
+print("All final accuracies: {}".format(final_accuracies))
+
+print("Mean accuracy:         {}".format(np.mean(valid_accuracies)))
+print("Standard deviation:    {}".format(np.std(valid_accuracies)))
+print("Minimum accuracy:      {}".format(min(valid_accuracies)))
+print("1st Quartile accuracy: {}".format(np.percentile(valid_accuracies, 25)))
+print("Median accuracy:       {}".format(np.percentile(valid_accuracies, 50)))
+print("3rd Quartile accuracy: {}".format(np.percentile(valid_accuracies, 75)))
+print("Maximum accuracy:      {}".format(max(valid_accuracies)))
+print("Interquartile range:   {}".format(np.percentile(valid_accuracies, 75) - np.percentile(valid_accuracies, 25)))
+print("Total time taken: {}".format((time.time()-starting_time)))
 
 
 

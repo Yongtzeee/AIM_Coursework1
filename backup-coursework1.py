@@ -101,8 +101,6 @@ num_valid_instances = args['num_valid_batch'] * args['valid_batch_size']
 
 data_rand_seed = 1 # (other pre-tested seeds: 2, 3)
 
-do_eval_iterations = 0
-
 # ============
 # Load dataset
 # ============
@@ -798,10 +796,6 @@ def interp_lrm(params):
 # Function to train a specific model
 # Early stopping, or returning best validation model, is not implemented 
 def do_eval_chrom(a_model, train_params, num_epochs):
-  global do_eval_iterations
-
-  do_eval_iterations += 1
-
   # Extract basic information
   lr1, lr2, lr2_epoch, a_momentum, lr_decr = train_params  
   args['lr'] = lr1
@@ -897,18 +891,16 @@ def do_training(a_model, train_params, num_epochs):
 # comparison purposes. In other words, focus only on modifying the architecture
 # search code below.
 
-import random #-
-import math #-
+import random
+import math
 
-starting_time = time.time() #-
-all_accur_valid = []  #-
-all_accur_final = []  #-
-all_average_loss = [[],[]] #-
+starting_time = time.time() # starting time to keep track of the total time taken to complete
+all_accur_valid = []  # data of validation accuracy of each trial is stored here
+all_accur_final = []  # data of final accuracy of each trial is store here
+# all_average_loss = [[],[]] # data if average loss if both validation accuracy and final accuracy are stored here
 
-rounds = 100 #-
-for round in range(rounds):
-  
-  do_eval_iterations = 0
+trials = 100
+for _ in range(trials):
 
   # --- Architectural search parameters
 
@@ -918,26 +910,16 @@ for round in range(rounds):
   meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
   meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
   meta['diff_lr'] = 0.4 # 0.5 # 0.1 # learning rate for differential search
-
-  meta['neighbour_relation'] = True
-  meta['modified_initialization'] = True
-  meta['reinitialize'] = True
-  meta['modified_differential_function'] = True
-  meta['solution_selection'] = True
-
-  if meta['neighbour_relation']:
-    meta['num_neighbours'] = 8 # 16 
-    meta['neighbour_range'] = 0.2  # 0.4  # mutation rate for stochastic hill-climbing
-  else:
-    meta['num_neighbours'] = 8 # 16 
-    meta['neighbour_range'] = 0.4  # 0.2  # mutation rate for stochastic hill-climbing
+  meta['num_neighbours'] = 8 # 16 
+  meta['neighbour_range'] = 0.2  # 0.4  # mutation rate for stochastic hill-climbing
 
   meta_rs_valids = []
   best_model = None
   best_chromosome = None
   best_model_accur = 0
 
-  mat_chroms = [[0 for x in range(comp_num_chrom_param(limits)+1)] for y in range(meta['max_rs_iter'])] #-
+  # list to store all initial search generated chromosomes
+  mat_chroms = [[0 for x in range(comp_num_chrom_param(limits)+1)] for y in range(meta['max_rs_iter'])]
 
   # Prepare model
   def prepare_model(a_rand_chrom):
@@ -961,8 +943,8 @@ for round in range(rounds):
 
     return model, train_params
 
-  # Start with a small random search
-  print('Initial random search ...')
+  # Start with a small search
+  print('Initial search ...')
   for rsi in range(meta['max_rs_iter']):
 
     if args['verbose_meta']:
@@ -970,13 +952,10 @@ for round in range(rounds):
 
     num_chrom_param = comp_num_chrom_param(limits)
     
-    if meta['modified_initialization']:
-      # sets all parameter values of the chromosomes to be n/m
-      # where n is the current search iteration
-      # and m is the total iterations
-      a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for x in range(num_chrom_param)])  #-
-    else:
-      a_rand_chrom = gen_rand_chromosome(num_chrom_param)
+    # sets all parameter values of the chromosomes to be n/m
+    #  where n is the current search iteration
+    #  and m is the total iterations
+    a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for x in range(num_chrom_param)])
 
     # --- Actual training
     model, train_params = prepare_model(a_rand_chrom)
@@ -992,15 +971,15 @@ for round in range(rounds):
       best_chromosome = a_rand_chrom
 
     meta_rs_valids.append(best_valid_accur)
-    mat_chroms[rsi][0] = best_valid_accur #-
-    mat_chroms[rsi][1:] = a_rand_chrom #-
+    # adds the generated chromosome with its accuracy into the list
+    mat_chroms[rsi][0] = best_valid_accur
+    mat_chroms[rsi][1:] = a_rand_chrom
   
-  mat_chroms = sorted(mat_chroms, reverse=True) #-
-  initial_chromosomes = mat_chroms
-  print('*****************************************************{}'.format(round))
+  # sorted list of chromosomes in the initial search by performance (accuracy)
+  mat_chroms = sorted(mat_chroms, reverse=True)
+  print('*****************************************************')
   print('Best accuracy after initial random search: {}'.format(best_model_accur))
   print('*****************************************************')
-  # print([i[0] for i in mat_chroms])
 
   if args['verbose_meta']:
     print('Best validation errors:')
@@ -1016,11 +995,10 @@ for round in range(rounds):
     # Create mutation vector
     mutat_vec = (np.random.rand(num_chrom_params)*neighbour_range)-(neighbour_range/2)  # each mutation unit is between [-(neighbour_range/2), neighbour_range/2]
 
-    if meta['neighbour_relation']:
-      # 1/3 chance of mutation parameter set to 0
-      for i in mutat_vec:
-        if random.random() < 0.333333:
-          i = 0
+    # 1/3 chance of setting a mutation vector parameter to 0
+    for i in mutat_vec:
+      if random.random() < 0.333333:
+        i = 0
     
     # Add mutation vector
     new_chromosome = a_chromosome + mutat_vec
@@ -1065,58 +1043,27 @@ for round in range(rounds):
     
     best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
     return best_res, mat_chrom_acur
-        
-  #-      
+  
   # Function for creating a list of neighbours
   def create_neighbours(mat_chroms, meta, num_chrom_params, iteration):
     
     neighbours = []
-    next_one = [] #-
+    next_one = [] # chromosome used for generating neighbours
     # Scan through number of neighbours
     for ni in range(meta['num_neighbours']):
-      if meta['solution_selection']:
-        # has a 20% chance of choosing the second best performing chromosome to create a neighbour from
-        # and if the validation accuracy of the second best performing chromosome is within 15% of the best performing chromosome
-        if random.random() < 0.2 and mat_chroms[1][0]/mat_chroms[0][0] > 0.85:
-          next_one = mat_chroms[1][1:]
-        else:
-          next_one = mat_chroms[0][1:]
+      # has a 20% chance of choosing the second best performing chromosome to create a neighbour from
+      # if the validation accuracy of the second best performing chromosome is within 15% of the best performing chromosome
+      if random.random() < 0.2 and mat_chroms[1][0]/mat_chroms[0][0] > 0.85:
+        next_one = mat_chroms[1][1:]
       else:
         next_one = mat_chroms[0][1:]
+      
       # Create neighbour
       a_neighb = create_a_neighbour(next_one, meta['neighbour_range'], num_chrom_params)
       # Append neighbour
       neighbours.append(a_neighb)
 
     return neighbours
-
-  # Simple differential search
-  def do_diff_chrom_v1(mat_chrom_accur, num_new_sol):
-    
-    # Initialize new chromosomes
-    num_chrom = mat_chrom_accur.shape[0]
-    if num_new_sol >= num_chrom:
-      num_new_sol = num_chrom-1
-    new_chromosomes = []
-
-    # Sort the array of chromosomes based on the first column (contains accur.)
-    mat_chrom_accur = mat_chrom_accur[(-mat_chrom_accur[:,0]).argsort()]
-    # print(mat_chrom_accur[:,0:4])
-    # Extract first/best chromosome
-    best_chrom = mat_chrom_accur[0,1:]
-    # Scan through new solutions
-    for si in range(num_new_sol):
-      # Extract next best chrom
-      next_best_chrom = mat_chrom_accur[1+si,1:]
-      # Compute differential
-      a_diff = best_chrom - next_best_chrom
-      # Add differential whilst applying a learning rate
-      a_new_chrom = best_chrom + (meta['diff_lr']*a_diff)
-      np.clip(a_new_chrom, 0, 0.99999999999, out=a_new_chrom)
-      # Store new solution 
-      new_chromosomes.append(a_new_chrom)
-
-    return new_chromosomes
 
   # Simple differential search v2
   def do_diff_chrom_v2(mat_chrom_accur, num_new_sol, num_chrom_params):
@@ -1134,17 +1081,14 @@ for round in range(rounds):
 
     # Scan through new solutions
     for si in range(num_new_sol):
-      # find average between first few best chomosomes
+      # find average between first few best chromosomes
       # find difference between best chromosome and the worst ones
-      # inverse to change the level of impact of differential
-      #  larger difference -> assumed as the algorithm has not plateau-ed yet (has not reached local optima)
-      #  smaller difference -> assumed as the algorithm has reached local optima and needs a larger push to get out from it
+      # divide the difference by the differential learning rate
+      #  larger difference -> assumed as the generation has not plateau-ed yet (has not reached local optima)
+      #  smaller difference -> assumed as the generation has reached local optima and needs a larger push to get out from it
       difference_of_chroms = best_chrom - mat_chrom_accur[len(mat_chrom_accur)-1-si, 1:]
-      # difference_of_chroms = [(meta['diff_lr']/difference_of_chroms[i]) for i in range(num_chrom_params)]
-      difference_of_chroms = [(difference_of_chroms[i]/meta['diff_lr']) for i in range(num_chrom_params)]
+      difference_of_chroms = [(meta['diff_lr']/difference_of_chroms[i]) for i in range(num_chrom_params)]
       
-      # interpolates the values of the mutation vector to between [0, 1]
-      # random_neighbour_gen =  np.interp(difference_of_chroms, [min(difference_of_chroms.tolist()), max(difference_of_chroms.tolist())], [0, 1])
       # Add differential whilst applying a learning rate
       a_new_chrom = best_chrom + difference_of_chroms
       np.clip(a_new_chrom, 0, 0.99999999999, out=a_new_chrom)
@@ -1156,58 +1100,58 @@ for round in range(rounds):
   # Architectural search iterations
 
   best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
+  initial_chromosomes = mat_chroms
 
   meta_start_time = time.time()
 
   non_improvement_iters = 0
   for shci in range(meta['max_shc_iter']):
 
-    if meta['reinitialize']:
-      # if the algorithm has not found a better performing chromosome for n rounds,
-      # where n being 3,4,5 depending on the current best performing chromosome's accuracy
-      # reinitialize with the next best performing chromosome in the initial search
-      if non_improvement_iters > (math.floor(best_model_accur/20) + 3):
-        mat_chroms[1] = initial_chromosomes[next_best_initial_chrom_ind]
-        mat_chroms[0] = initial_chromosomes[next_best_initial_chrom_ind]
-        next_best_initial_chrom_ind += 1
-        non_improvement_iters = 0
+    # if the algorithm has not found a better performing chromosome for n rounds,
+    #  where n starts at 3 and increments for every 20% increase in
+    #  the current best performing chromosome's accuracy,
+    #  reinitialize with the next best performing chromosome in the initial search
+    if non_improvement_iters > (math.floor(best_model_accur/20) + 3):
+      # both chromosomes are replaced with the next best initial search chromosome to ensure 100% reinitialization
+      #  as reinitialization starts in next neighbourhood generation
+      mat_chroms[1] = initial_chromosomes[next_best_initial_chrom_ind]
+      mat_chroms[0] = initial_chromosomes[next_best_initial_chrom_ind]
+      next_best_initial_chrom_ind += 1
+      non_improvement_iters = 0
 
     best_model_accur, best_chromosome, best_model, best_train_params = best_res
 
     if args['verbose_meta']:
-      print('======================================{}'.format(round))
+      print('======================================')
       print('Stochastic hill-climbing iteration {}.'.format(shci))
       print('======================================')
       print('Best accuracy so far: {}'.format(best_model_accur))
       print('======================================')
     
     # --- Create a set of stochastic neighbours from the current best models
-    chrom_neighbors = create_neighbours(mat_chroms, meta, num_chrom_params, shci)  #-
+    chrom_neighbors = create_neighbours(mat_chroms, meta, num_chrom_params, shci)
     # Test validation accuracies of neighbours
     new_res, mat_chrom_acur = eval_chromosomes(chrom_neighbors,num_chrom_params)
 
     if new_res[0] > best_res[0]:
-      non_improvement_iters = 0 #-
-      best_res = new_res    # model
+      non_improvement_iters = 0
+      best_res = new_res
       
-    print('***********************************************{}'.format(round))
+    print('***********************************************')
     print('Best accuracy after random mutation: {}'.format(new_res[0]))
     print('***********************************************')
     
     # --- Simple differential search
     print('***** Differential Search *********************')
 
-    if meta['modified_differential_function']:
-      diff_chromosomes = do_diff_chrom_v2(mat_chrom_acur, meta['num_differential_sol'], num_chrom_params)
-    else:
-      diff_chromosomes = do_diff_chrom_v1(mat_chrom_acur, meta['num_differential_sol'])
+    diff_chromosomes = do_diff_chrom_v2(mat_chrom_acur, meta['num_differential_sol'], num_chrom_params)
     
     new_res, mat_chrom_acur = eval_chromosomes(diff_chromosomes,num_chrom_params)
     if new_res[0] > best_res[0]:
-      non_improvement_iters = 0 #-
-      best_res = new_res    # model
+      non_improvement_iters = 0
+      best_res = new_res
     
-    print('***********************************************{}'.format(round))
+    print('***********************************************')
     print('Best accuracy after differential search: {}'.format(new_res[0]))
     print('***********************************************')
     
@@ -1217,7 +1161,7 @@ for round in range(rounds):
 
   meta_elapsed_time = time.time() - meta_start_time
   if args['verbose_meta']:
-    print('====================================================={}'.format(round))
+    print('=====================================================')
     print('Architectural optimization total time: {}.'.format(meta_elapsed_time))
     print('=====================================================')
     
@@ -1284,30 +1228,31 @@ for round in range(rounds):
   print('=====================================')
   print('Model with best validation accuracy: ')
   accur_valid, test_loss = final_test(best_validation_model)
-  all_average_loss[0].append(test_loss.item())  #-
+  # all_average_loss[0].append(test_loss.item())
   print('Model at the end of training: ')
   accur_final, test_loss = final_test(best_final_model)
-  all_average_loss[1].append(test_loss.item())  #-
+  # all_average_loss[1].append(test_loss.item())
 
   # max_accur = int(max(accur_valid, accur_final))
   # print("The max accuracy is: {}".format(max_accur))
 
-  all_accur_valid.append(accur_valid) #-
-  all_accur_final.append(accur_final) #-
+  all_accur_valid.append(accur_valid)
+  all_accur_final.append(accur_final)
     
+valid_accuracies = [i.item() for i in all_accur_valid]
+final_accuracies = [i.item() for i in all_accur_final]
+print("All valid accuracies: {}".format(valid_accuracies))
+print("All final accuracies: {}".format(final_accuracies))
 
-print("All valid accuracies: {}".format([i.item() for i in all_accur_valid])) #-
-print("All final accuracies: {}".format([i.item() for i in all_accur_final])) #-
-# print("All average losses: {}".format(all_average_loss))  #-
-print("Best validation accuracy after {} rounds: {}".format(rounds, max(all_accur_valid))) #-
-print("Worst validation accuracy after {} rounds: {}".format(rounds, min(all_accur_valid))) #-
-print("Mean validation accuracy for {} rounds: {}".format(rounds, torch.mean(torch.stack(all_accur_valid)))) #-
-print("Median validation accuracy for {} rounds: {}".format(rounds, torch.median(torch.stack(all_accur_valid)))) #-
-print("Total time: {}".format((time.time()-starting_time))) #-
-
-plt.errorbar(np.arange(rounds), all_accur_valid, yerr=np.array(all_average_loss[0]))
-
-print(do_eval_iterations)
+print("Mean accuracy:         {}".format(np.mean(valid_accuracies)))
+print("Standard deviation:    {}".format(np.std(valid_accuracies)))
+print("Minimum accuracy:      {}".format(min(valid_accuracies)))
+print("1st Quartile accuracy: {}".format(np.percentile(valid_accuracies, 25)))
+print("Median accuracy:       {}".format(np.percentile(valid_accuracies, 50)))
+print("3rd Quartile accuracy: {}".format(np.percentile(valid_accuracies, 75)))
+print("Maximum accuracy:      {}".format(max(valid_accuracies)))
+print("Interquartile range:   {}".format(np.percentile(valid_accuracies, 75) - np.percentile(valid_accuracies, 25)))
+print("Total time taken: {}".format((time.time()-starting_time)))
 
 
 
