@@ -914,7 +914,7 @@ import math
 
 # --- Architectural search parameters
 meta = {}
-meta['max_rs_iter'] = 10 # 10  # initial random search
+meta['max_rs_iter'] = 6 # 10  # initial random search
 meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
 meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
 meta['diff_lr'] = 0.4 # 0.5 # 0.1 # learning rate for differential search
@@ -922,20 +922,11 @@ meta['num_neighbours'] = 8 # 16
 meta['neighbour_range'] = 0.2  # 0.4  # mutation rate for stochastic hill-climbing
 
 # --- Population based search parameters (genetic algorithm)
-meta['population_search_iter'] = 4  # population based genetic algorithm search iteration
-meta['max_shc_iter_crossover'] = 4  # local search iteration
-meta['num_chromosomes'] = 5 # population size
-meta['num_offsprings'] = 5  # number of offsprings generated each population based search iteration
-meta['num_neighbours_crossover'] = 3  # number of chromosomes generated from local search
-meta['neighbour_range_crossover'] = 70  # mutation rate for local search
-meta['mutation_rate'] = 0.2 # mutation rate of the newly generated chromosome
-meta['num_crossovers'] = 4 # 3 # 2 # 4  # number of crossovers to occur between parent chromosomes
+# meta['population_search_iter'] = 6  # population based genetic algorithm search iteration
+meta['mutation_rate'] = 0.2 # mutation rate of a newly generated chromosome
 
-# --- Population based search parameters
-
-
-meta['step_size'] = 30.0  # step size of local search
-meta["local_search_iter"] = 3 # number of local search iterations
+meta['local_search_iter'] = 4 # number of local search iterations
+meta['step_size'] = 0.1 # step size for local search
 
 
 # -----------------------------------------------------------------------------
@@ -969,6 +960,7 @@ def prepare_model(a_rand_chrom):
 
 # Evaluate a list of chromosomes
 def eval_chromosomes(list_chromosomes,num_chrom_params):
+  global do_eval_iter, terminate_search
   
   # best_model_accur, best_chromosome, best_model, best_train_params = best_res
   
@@ -982,6 +974,9 @@ def eval_chromosomes(list_chromosomes,num_chrom_params):
   neighb_valid_accurs = []
 
   for ci, a_chrom in enumerate(list_chromosomes):
+    if do_eval_iter >= 250:
+      terminate_search = True
+      break
     if args['verbose_meta']:
       print('Chromosome {} ...'.format(ci))
     # --- Actual training
@@ -1083,6 +1078,7 @@ def local_search(a_chrom, num_chrom_params):
   acur_ind = 0
   
   chromosome = np.array(a_chrom[1:])
+  chrom_result = a_chrom
   for lsi in range(meta["local_search_iter"]):
 
     print("=========================================================")
@@ -1104,6 +1100,9 @@ def local_search(a_chrom, num_chrom_params):
 
     if new_res[0] > best_res[0]:
       best_res = new_res
+    
+    if new_res[0] > chrom_result:
+      chrom_result = np.concatenate(([new_res[0]], new_res[1]))
 
     if acur_record[acur_ind] > acur_record[acur_ind - 1]:
       # if current accuracy is better than previous accuracy
@@ -1128,7 +1127,7 @@ def local_search(a_chrom, num_chrom_params):
         # else, go in opposite direction
         momentum *= -1.0
 
-  return np.concatenate(([best_res[0]], best_res[1]))
+  return chrom_result # np.concatenate(([best_res[0]], best_res[1]))
 
 # -----------------------------------------------------------------------------
 # population-based search functions
@@ -1180,6 +1179,10 @@ def gravitational_search(chroms_list, num_chrom_params):
   new_chroms = np.add(new_chroms, inertia)
   np.clip(new_chroms, 0, 0.99999999999, out=new_chroms)
   
+  # perform mutation
+  for a_chrom in new_chroms:
+    a_chrom = mutate_offspring(a_chrom, num_chrom_params)
+  
   # evaluate chromosomes
   new_res, mat_chrom_acur = eval_chromosomes(new_chroms, num_chrom_params)
 
@@ -1189,7 +1192,8 @@ def gravitational_search(chroms_list, num_chrom_params):
   # local search
   for i, a_chrom in enumerate(mat_chrom_acur):
     best_chrom = local_search(a_chrom, num_chrom_params)
-    mat_chrom_acur[i] = best_chrom
+    if best_chrom[0] > mat_chrom_acur[i][0]:
+      mat_chrom_acur[i] = best_chrom
   
   chroms_list = mat_chrom_acur
 
@@ -1240,15 +1244,14 @@ all_accur_valid = []  # data of validation accuracy of each trial is stored here
 all_accur_final = []  # data of final accuracy of each trial is store here
 # all_average_loss = [[],[]] # data if average loss if both validation accuracy and final accuracy are stored here
 
-trials = 1
+trials = 1 # 20
 for _ in range(trials):
-
-  do_eval_iter = 0
-
   meta_rs_valids = []
   best_model = None
   best_chromosome = None
   best_model_accur = 0
+
+  do_eval_iter = 0
 
   # list to store all initial search generated chromosomes
   mat_chroms = [[0 for x in range(comp_num_chrom_param(limits)+1)] for y in range(meta['max_rs_iter'])]
@@ -1296,20 +1299,20 @@ for _ in range(trials):
     print('Best validation errors:')
     print(meta_rs_valids)
 
-
-  # -----------------------------------------------------------------------------------------------------------
-  # population-based search
-
   num_chrom_params = best_chromosome.shape[0]
   next_best_initial_chrom_ind = 1
 
   best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
 
-  for iteration in range(meta['population_search_iter']):
-    
-    # # --- Population based search
+  # -----------------------------------------------------------------------------------------------------------
+  # population-based search
+
+  terminate_search = False
+  pop_search_iter = 0
+
+  while not terminate_search:
     print("=========================================================")
-    print("population search iteration: {}".format(iteration))
+    print("population search iteration: {}".format(pop_search_iter))
     print("=========================================================")
 
     # gravitational search algorithm
@@ -1329,7 +1332,9 @@ for _ in range(trials):
 
     mat_chrom_accur = np.concatenate((mat_chroms[0:(len(mat_chroms) - len(diff_chrom_accur))], diff_chrom_accur))
     mat_chroms = sorted(mat_chrom_accur.tolist(), reverse=True)
-    
+
+    pop_search_iter += 1
+      
 
   # -----------------------------------------------------------------------------------------------------------
   # final evaluation
