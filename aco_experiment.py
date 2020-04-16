@@ -1253,6 +1253,7 @@ def local_search(a_chrom, prev_chrom, num_chrom_params, pop_search_iter):
     reverse_direction = False
     lsi += 1
 
+  return best_chrom
 
 # -----------------------------------------------------------------------------
 # final evaluation functions
@@ -1330,8 +1331,8 @@ for ti in range(trials):
 
     num_chrom_param = comp_num_chrom_param(limits)
 
-    # a_rand_chrom = gen_rand_chromosome(num_chrom_param)
-    a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for i in range(num_chrom_param)])
+    a_rand_chrom = gen_rand_chromosome(num_chrom_param)
+    # a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for i in range(num_chrom_param)])
 
     # --- Actual training
     model, train_params = prepare_model(a_rand_chrom)
