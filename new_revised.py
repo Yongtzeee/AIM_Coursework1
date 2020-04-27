@@ -1075,41 +1075,56 @@ def differential_search_v3(chroms_list, bad_chroms_ind, good_solutions, bad_solu
   # solutions_list = np.concatenate((good_solutions, bad_solutions))
   # random.shuffle(solutions_list)
 
-  # difference between goos_solution mean and best half of population mean
+  # # difference between solutions list and best half of population
+  # solutions_list = np.concatenate((good_solutions, bad_solutions))
+  # avg_sol = np.mean(solutions_list, 0)
+  # avg_chroms_list = np.mean(sorted(chroms_list.tolist(), reverse=True)[0:math.floor(len(chroms_list/2))], 0)
+  # average_vec = avg_sol[1:] - avg_chroms_list[1:]
+  # avg_accur_diff = (avg_sol[0] - avg_chroms_list[0])/100
+
+  # difference between good_solution mean and best half of population mean
   avg_good_sol = np.mean(good_solutions, 0)
   avg_chroms_list = np.mean(sorted(chroms_list.tolist(), reverse=True)[0:math.floor(len(chroms_list/2))], 0)
-  average_chrom = avg_good_sol[1:] - avg_chroms_list[1:]
+  average_vec = avg_good_sol[1:] - avg_chroms_list[1:]
   avg_accur_diff = (avg_good_sol[0] - avg_chroms_list[0])/100
+
+  # # difference between bad_solution mean and best half of population mean
+  # avg_bad_sol = np.mean(bad_solutions, 0)
+  # avg_chroms_list = np.mean(sorted(chroms_list.tolist(), reverse=True)[0:math.floor(len(chroms_list/2))], 0)
+  # average_vec = -1 * (avg_chroms_list[1:] - avg_bad_sol[1:])
+  # avg_accur_diff = (avg_chroms_list[0] - avg_bad_sol[0])/100
+
   # # simple mean
-  # average_chrom = np.mean(good_solutions, 0)
-  # # weighted mean
-  # average_chrom = np.array([0.0 for i in range(num_chrom_params)])
-  # ratio = [0.0 for i in range(len(good_solutions))]
-  # total = sum([i[0] for i in good_solutions])
-  # for i in range(len(good_solutions)):
-  #   ratio[i] = good_solutions[i][0]/total
-  # for i, chrom in enumerate(good_solutions):
-  #   average_chrom += np.multiply(chrom[1:], ratio[i])
+  # average_vec = np.mean(good_solutions, 0)
   
   for dsi in range(num_chroms):
 
     print("=========================================================")
     print("differential search iteration: {}".format(dsi+1))
     print("=========================================================")
+
+    # # increase the probability of using the good solutions average as the number of chroms to evaluate from
+    # # as length of the chroms to replace increases in logarithimic manner
+    # if random.random() < 1 - 1/num_chroms:
+    #   # difference between good_solution mean and best half of population mean
+    #   avg_good_sol = np.mean(good_solutions, 0)
+    #   avg_chroms_list = np.mean(sorted(chroms_list.tolist(), reverse=True)[0:math.floor(len(chroms_list/2))], 0)
+    #   average_vec = avg_good_sol[1:] - avg_chroms_list[1:]
+    #   avg_accur_diff = (avg_good_sol[0] - avg_chroms_list[0])/100
+    # else:
+    #   # difference between bad_solution mean and best half of population mean
+    #   avg_bad_sol = np.mean(bad_solutions, 0)
+    #   avg_chroms_list = np.mean(sorted(chroms_list.tolist(), reverse=True)[0:math.floor(len(chroms_list/2))], 0)
+    #   average_vec = -1 * (avg_chroms_list[1:] - avg_bad_sol[1:])
+    #   avg_accur_diff = (avg_chroms_list[0] - avg_bad_sol[0])/100
+
+    # # difference between good_solution mean and best half of population mean
+    # avg_good_sol = np.mean(good_solutions, 0)
+    # avg_chroms_list = np.mean(sorted(chroms_list.tolist(), reverse=True)[0:math.floor(len(chroms_list/2))], 0)
+    # average_vec = avg_good_sol[1:] - avg_chroms_list[1:]
+    # avg_accur_diff = (avg_good_sol[0] - avg_chroms_list[0])/100
     
-    # while True:
-    #   rand_chrom1 = random.randint(0, len(solutions_list)-1)
-    #   rand_chrom2 = random.randint(0, len(solutions_list)-1)
-    #   if rand_chrom1 != rand_chrom2:
-    #     break
-    # rand_chrom1 = solutions_list[rand_chrom1]
-    # rand_chrom2 = solutions_list[rand_chrom2]
-    # difference_accur = (rand_chrom1[0] - rand_chrom2[0]) / 100
-    # difference_vec = np.subtract(rand_chrom1[1:], rand_chrom2[1:])
-    # directed_vec = np.multiply(difference_vec, difference_accur)
-    
-    perturb_vec = average_chrom * random.random()
-    # perturb_vec = average_chrom * avg_accur_diff
+    perturb_vec = average_vec * random.random()
     directed_vec = np.subtract(max(good_solutions)[1:], perturb_vec)
     if increase_pop:
       new_chrom = np.add(random.choice(chroms_list)[1:], directed_vec)
@@ -1135,7 +1150,7 @@ def differential_search_v3(chroms_list, bad_chroms_ind, good_solutions, bad_solu
 # local search functions
 
 def local_search_v2(chrom1, chrom2, num_chrom_params):
-  global best_res
+  global best_res, thresh_increase_rate
 
   best_chrom = chrom1
   current_chrom = chrom1
@@ -1149,7 +1164,7 @@ def local_search_v2(chrom1, chrom2, num_chrom_params):
   while breakout_countdown >= 0 and max_iterations >= 0:
 
     print("=========================================================")
-    print("local search iteration: {}".format(lsi+1))
+    print("local search iteration: {}".format(lsi))
     print("=========================================================")
 
     accuracy = current_chrom[0] / 100
@@ -1157,7 +1172,7 @@ def local_search_v2(chrom1, chrom2, num_chrom_params):
     if accuracy_diff < 0:
       reverse_direction = True
       accuracy_diff = abs(accuracy_diff)
-    elif accuracy_diff <= 0.01 and accuracy_diff >= -0.01:
+    elif accuracy_diff <= 0.01:
       # clip anything between 0% and 1% inclusive accuracy difference to 1%
       accuracy_diff = 0.01
     threshold_angle = math.pi/2 * (1 - accuracy_diff) * accuracy
@@ -1189,23 +1204,29 @@ def local_search_v2(chrom1, chrom2, num_chrom_params):
         # next_step = np.multiply(rand_vec, magnitude_ratio)
       else:
         # otherwise after some time, the default trajectory will be used
-        trajectory = trajectory * -1
-        next_step = trajectory
+        next_step = trajectory * -1
     
     new_chrom = current_chrom[1:] + next_step
     np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
     
     new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
     if new_res[0] > best_res[0]:
+      thresh_increase_rate += (new_res[0] - best_res[0])/5
       best_res = new_res
 
     # if the newly evaluated chromosome performs better than the currect best chromosome
     if new_chrom_accur[0][0] > best_chrom[0]:
       best_chrom = new_chrom_accur[0]
       breakout_countdown = 10 - math.ceil(best_chrom[0]/10)
-    # apply some simulated annealing
     else:
       breakout_countdown -= 1
+    
+    # # logarithmically decreasing chance of setting the best_chrom as the previous chromosome
+    # # this is to encourage exploration within the local search space at the beginning
+    # if random.random() < 1/math.exp(lsi):
+    #   previous_chrom = best_chrom
+    # else:
+    #   previous_chrom = current_chrom
     
     max_iterations -= 1
     previous_chrom = current_chrom
@@ -1265,7 +1286,7 @@ all_average_loss = [[],[]] # data if average loss if both validation accuracy an
 # best_chromosomes_list = []
 # best_train_params_list = []
 
-trials = 20 # 20
+trials = 100 # 20
 for ti in range(trials):
   meta_rs_valids = []
   best_model = None
@@ -1340,8 +1361,8 @@ for ti in range(trials):
 
   good_solutions = []
   bad_solutions = []
-  good_sol_thresh = 2
-  bad_sol_thresh = 15 # 5
+  good_sol_thresh = 5
+  bad_sol_thresh = 5 # 5
   good_sol_radius = 6 # 11.5  # 6  # impact radius for good solutions
   bad_sol_radius = 6  # 11.5  # 6  # impact radius for bad solutions
 
@@ -1354,11 +1375,20 @@ for ti in range(trials):
     if a_chrom[0] <= accuracy_thresh:
       bad_solutions.append(a_chrom)
     else:
-      if len(good_solutions) > good_sol_thresh:
-        pass
-      else:
-        if a_chrom not in good_solutions:
-          good_solutions.append(a_chrom)
+      good_solutions.append(a_chrom)
+
+  # sorted_mat_chroms = sorted(mat_chroms, reverse=True)
+  # good_solutions.append(sorted_mat_chroms[0])
+  # good_solutions.append(sorted_mat_chroms[1])
+  # for i, a_chrom in enumerate(mat_chroms):
+  #   if a_chrom[0] <= accuracy_thresh:
+  #     bad_solutions.append(a_chrom)
+  #   else:
+  #     if len(good_solutions) > good_sol_thresh:
+  #       pass
+  #     else:
+  #       if a_chrom not in good_solutions:
+  #         good_solutions.append(a_chrom)
 
   # sorted_mat_chroms = sorted(mat_chroms, reverse=True)
   # good_solutions.append(sorted_mat_chroms[0])
@@ -1455,28 +1485,28 @@ for ti in range(trials):
       # CHANGES MADE
       # ------------------------------------------------------------------
       # all good and bad solutions will influence the current chromosome, not just the closest
-      for j, sol in enumerate(good_solutions):
-        if np.all(np.equal(a_chrom, sol)):
-          continue
-        # calculate Euclidean distance between the two chomosomes
-        # source: https://stackoverflow.com/a/50639386
-        euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** 0.5
-        diff_vec = np.subtract(sol[1:], a_chrom[1:])
-        force_vec = np.multiply(diff_vec, 1 - euclid_dis/20)
-        force_ratio = force_vec * (sol[0]/100)
-        direction_vec[i] = np.add(direction_vec[i], force_ratio)
-      
-      # for j, sol in enumerate(bad_solutions):
+      # for j, sol in enumerate(good_solutions):
       #   if np.all(np.equal(a_chrom, sol)):
       #     continue
       #   # calculate Euclidean distance between the two chomosomes
       #   # source: https://stackoverflow.com/a/50639386
       #   euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** 0.5
       #   diff_vec = np.subtract(sol[1:], a_chrom[1:])
-      #   diff_vec = diff_vec * -1
       #   force_vec = np.multiply(diff_vec, 1 - euclid_dis/20)
       #   force_ratio = force_vec * (sol[0]/100)
       #   direction_vec[i] = np.add(direction_vec[i], force_ratio)
+      
+      for j, sol in enumerate(bad_solutions):
+        if np.all(np.equal(a_chrom, sol)):
+          continue
+        # calculate Euclidean distance between the two chomosomes
+        # source: https://stackoverflow.com/a/50639386
+        euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** 0.5
+        diff_vec = np.subtract(sol[1:], a_chrom[1:])
+        diff_vec = diff_vec * -1
+        force_vec = np.multiply(diff_vec, 1 - euclid_dis/20)
+        force_ratio = force_vec * ((1-sol[0]) / 100)
+        direction_vec[i] = np.add(direction_vec[i], force_ratio)
 
       new_chrom = np.add(a_chrom[1:], direction_vec[i])
       np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
@@ -1504,6 +1534,7 @@ for ti in range(trials):
           bad_solutions[bad_solutions.index(max(bad_solutions))] = a_chrom.tolist()
         else:
           bad_solutions.append(a_chrom.tolist())
+        # bad_solutions[bad_solutions.index(max(bad_solutions))] = a_chrom.tolist()
       else:
         has_good_sol = True
         # perform local search when is a potentially good solution
@@ -1514,6 +1545,7 @@ for ti in range(trials):
           good_solutions[good_solutions.index(min(good_solutions))] = new_chrom.tolist()
         else:
           good_solutions.append(new_chrom.tolist())
+        # good_solutions[good_solutions.index(min(good_solutions))] = new_chrom.tolist()
       
       accuracy_thresh += thresh_increase_rate
       thresh_increase_rate = 0.0
