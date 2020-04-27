@@ -1788,15 +1788,16 @@ for ti in range(trials):
 
   accuracy_thresh = 12.0
 
-  # for i, a_chrom in enumerate(mat_chroms):
-  #   if a_chrom[0] <= accuracy_thresh:
-  #     bad_solutions.append(a_chrom)
-  #   else:
-  #     good_solutions.append(a_chrom)
+  for i, a_chrom in enumerate(mat_chroms):
+    if a_chrom[0] <= accuracy_thresh:
+      bad_solutions.append(a_chrom)
+    else:
+      good_solutions.append(a_chrom)
 
-  sorted_mat_chroms = sorted(mat_chroms, reverse=True)
-  good_solutions.append(sorted_mat_chroms[0])
-  bad_solutions.append(sorted_mat_chroms[len(sorted_mat_chroms)-1])
+  # sorted_mat_chroms = sorted(mat_chroms, reverse=True)
+  # good_solutions.append(sorted_mat_chroms[0])
+  # bad_solutions.append(sorted_mat_chroms[len(sorted_mat_chroms)-1])
+
   # bad_solutions = sorted_mat_chroms[0:math.floor(len(sorted_mat_chroms)/2)]
   # good_solutions = sorted_mat_chroms[math.floor(len(sorted_mat_chroms)/2):]
 
@@ -2051,7 +2052,7 @@ for ti in range(trials):
       good_sol_radius = 6
       bad_sol_radius = 6
     
-    if pop_search_iter%3 == 0:
+    if bad_solution_counter >= 9:
       # differential search
       evaluated_chroms = differential_search_v2(evaluated_chroms, good_solutions, bad_solutions, num_chrom_params)
       bad_solution_counter = 0

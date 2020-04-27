@@ -915,6 +915,7 @@ import math
 # --- Architectural search parameters
 meta = {}
 meta['max_rs_iter'] = 10 # 10  # initial random search
+meta['min_pop_size'] = 5 # minimum population size
 meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
 meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
 meta['diff_lr'] = 0.4 # 0.5 # 0.1 # learning rate for differential search
@@ -929,10 +930,11 @@ meta['num_offsprings'] = 5  # number of offsprings generated each population bas
 meta['num_neighbours_crossover'] = 3  # number of chromosomes generated from local search
 meta['neighbour_range_crossover'] = 70  # mutation rate for local search
 meta['mutation_rate'] = 0.2 # mutation rate of the newly generated chromosome
-meta['num_crossovers'] = 1 # 3 # 2 # 4  # number of crossovers to occur between parent chromosomes
+meta['num_crossovers'] = 4 # 3 # 2 # 4  # number of crossovers to occur between parent chromosomes
 
-meta['step_size'] = 0.1  # step size of local search
+meta['step_size'] = 0.1 # 30.0  # step size of local search
 meta["local_search_iter"] = 5 # number of local search iterations
+
 
 
 # -----------------------------------------------------------------------------
@@ -964,9 +966,27 @@ def prepare_model(a_rand_chrom):
 # -----------------------------------------------------------------------------
 # stochastic hill-climbing algorithm functions
 
+# Function for creating one neighbour
+def create_a_neighbour(a_chromosome, neighbour_range, num_chrom_params):
+  # Create mutation vector
+  mutat_vec = (np.random.rand(num_chrom_params)*neighbour_range)-(neighbour_range/2)  # each mutation unit is between [-(neighbour_range/2), neighbour_range/2]
+
+  # 1/3 chance of setting a mutation vector parameter to 0
+  for i in mutat_vec:
+    if random.random() < 0.333333:
+      i = 0
+  
+  # Add mutation vector
+  new_chromosome = a_chromosome + mutat_vec
+  # Clip
+  np.clip(new_chromosome, 0, 0.99999999999, out=new_chromosome)
+
+  return new_chromosome
+
 # Evaluate a list of chromosomes
 def eval_chromosomes(list_chromosomes,num_chrom_params):
-  
+  global do_eval_iter, terminate_search
+
   # best_model_accur, best_chromosome, best_model, best_train_params = best_res
   
   best_model_accur = 0
@@ -979,6 +999,9 @@ def eval_chromosomes(list_chromosomes,num_chrom_params):
   neighb_valid_accurs = []
 
   for ci, a_chrom in enumerate(list_chromosomes):
+    if do_eval_iter >= 250:
+      terminate_search = True
+      break
     if args['verbose_meta']:
       print('Chromosome {} ...'.format(ci))
     # --- Actual training
@@ -1000,6 +1023,27 @@ def eval_chromosomes(list_chromosomes,num_chrom_params):
   
   best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
   return best_res, mat_chrom_acur
+
+# Function for creating a list of neighbours
+def create_neighbours(mat_chroms, meta, num_chrom_params, iteration):
+  
+  neighbours = []
+  next_one = [] # chromosome used for generating neighbours
+  # Scan through number of neighbours
+  for ni in range(meta['num_neighbours']):
+    # has a 20% chance of choosing the second best performing chromosome to create a neighbour from
+    # if the validation accuracy of the second best performing chromosome is within 15% of the best performing chromosome
+    if random.random() < 0.2 and mat_chroms[1][0]/mat_chroms[0][0] > 0.85:
+      next_one = mat_chroms[1][1:]
+    else:
+      next_one = mat_chroms[0][1:]
+    
+    # Create neighbour
+    a_neighb = create_a_neighbour(next_one, meta['neighbour_range'], num_chrom_params)
+    # Append neighbour
+    neighbours.append(a_neighb)
+
+  return neighbours
 
 
 # -----------------------------------------------------------------------------
@@ -1045,65 +1089,234 @@ def do_diff_chrom_v2(mat_chrom_accur, num_new_sol, num_chrom_params):
 
   return new_chromosomes
 
-def differential_search(parents, offsprings, num_new_sol, num_chrom_params):
 
-  # Initialize new chromosomes
-  num_chrom = mat_chrom_accur.shape[0]
-  if num_new_sol >= num_chrom:
-    num_new_sol = num_chrom-1
+def differential_search(chroms_list, increase_pop, num_chrom_params):
+  global best_res
+
   new_chromosomes = []
-  
-  # Sort the array of chromosomes based on the first column (contains accur.)
-  parents = sorted(parents, reverse=True)
-  offsprings = sorted(offsprings, reverse=True)
+  dsi = 0
+  chroms_ind = len(chroms_list)-1
+  if increase_pop:
+    num_chroms = len(chroms_list)
+  else:
+    num_chroms = math.floor(len(chroms_list)/2)
+  for dsi in range(num_chroms):
 
-  # Scan through new solutions
-  for si in range(num_new_sol):
+    print("=========================================================")
+    print("differential search iteration: {}".format(dsi))
+    print("=========================================================")
+    
+    while True:
+      chrom1_ind = random.randint(0, len(chroms_list)-1)
+      chrom2_ind = random.randint(0, len(chroms_list)-1)
+      if chrom1_ind != chrom2_ind:
+        break
+    chrom1 = chroms_list[chrom1_ind][1:]
+    chrom2 = chroms_list[chrom2_ind][1:]
 
-    # find difference between best parents and offsprings
-    difference_of_chroms = []
+    difference_accur = (chrom1[0]-chrom2[0]) / 100
+    difference_vec = np.subtract(chrom1, chrom2)
+    directed_vec = np.multiply(difference_vec, difference_accur)
 
+    new_chrom = np.add(chroms_list[chroms_ind][1:], directed_vec)
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
 
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+    
+    if increase_pop:
+      chroms_list.append(new_chrom_accur[0].tolist())
+      # # add new chromosome to population only if the chromosome performs better
+      # # than the worst chromosome in the population
+      # if new_chrom_accur[0][0] > min(chroms_list)[0]:
+      #   chroms_list.append(new_chrom_accur[0].tolist())
+    else:
+      if new_chrom_accur[0][0] > chroms_list[chroms_ind][0]:
+        chroms_list[chroms_ind] = new_chrom_accur[0].tolist()
+      else:
+        del chroms_list[chroms_ind]
+        # chroms_list.pop(chroms_ind)
+    
+    chroms_ind -= 1
 
-    # Add differential whilst applying a learning rate
-    a_new_chrom = best_chrom + difference_of_chroms
-    # # interpolate up to 3 standard deviations from mean to [0,1) and clip the outliers
-    # avg_param_value = np.mean(a_new_chrom)
-    # std_param_value = np.std(a_new_chrom)
-    # a_new_chrom = np.interp(a_new_chrom, [avg_param_value - (3 * std_param_value), avg_param_value + (3 * std_param_value)], [0, 1])
-    np.clip(a_new_chrom, 0, 0.99999999999, out=a_new_chrom)
-    # Store new solution 
-    new_chromosomes.append(a_new_chrom)
-
-  return new_chromosomes
+  return chroms_list
 
 
 # -----------------------------------------------------------------------------
 # local search functions
 
-# def local_search_chromosome_sa(a_chrom, num_chrom_params):
-#   # simulated annealing
+# # function for creating a single neighbour
+# def create_a_neighbour_crossover(a_crossover, neighbour_range, num_crossover_points, num_chrom_params):
+#   # create mutation vector
+#   mutat_vec = np.random.randint(neighbour_range, size=num_crossover_points) - (neighbour_range/2)
+#   # add mutation vector to changeable part of crossover
+#   new_crossover = a_crossover[1:len(a_crossover)-1] + mutat_vec
+#   # clip
+#   np.clip(new_crossover, 0, num_chrom_params - 1, out=new_crossover)
+#   # add the head and tail into the list of crossover points parsed from float to int
+#   new_crossover = [0] + [int(i) for i in new_crossover.tolist()] + [num_chrom_params]
+#   new_crossover = sorted(new_crossover)
 
-#   pass
+#   return new_crossover
 
-def local_search_chromosome(a_chrom, num_chrom_params):
+# # function that creates a list of neighbours for local search
+# def create_neighbours_crossover(best_crossover, num_crossover_points, num_chrom_params):
+#   neighbours_crossover = []
+#   for ni in range(meta['num_neighbours_crossover']):
+#     # create neighbour
+#     a_neighb = create_a_neighbour_crossover(best_crossover, meta['neighbour_range_crossover'], num_crossover_points, num_chrom_params)
+#     # append neighbour
+#     neighbours_crossover.append(a_neighb)
+  
+#   return neighbours_crossover
+
+def random_walk(a_chrom, num_chrom_params):
   global best_res
-  # local search:
-  # current chromosome vector, add step (learning rate) and momentum ([-1, 1])
-  # 1. initialize step
-  # 2. randomly select momentum
-  # 3. multiply step and momentum
-  # 4. add to current chromosome vector
-  # 5. evaluate new chromosome with new chromosome vector
-  # 6. if decrease in accuracy^
-  #     - move in other direction*
-  #    else
-  #     - decrease magnitude of momentum and move in same direction
-  #     - have a chance for perturbing
-  # 7. repeat step 3 to 6 until termination criteria reached
-  #
-  # ^next step would be to change momentum with weight with repect to accuracy
-  # *depending on circumstances will have to do different things
+
+  random_walk_iter = 5 #
+  num_selection = 10
+
+  best_chrom = a_chrom
+  rw_selection = [[(random.random()*0.2 - 0.1) for i in range(num_chrom_params)] for j in range(num_selection)]
+  options = [i for i in range(num_selection)]
+  for rwi in range(random_walk_iter):
+
+    print("=========================================================")
+    print("random walk local search iteration: {}".format(rwi+1))
+    print("=========================================================")
+
+    while True:
+      random_ind = random.choice(options)
+      if random_ind != -1:
+        break
+    random_step = rw_selection[random_ind]
+    options[random_ind] = -1
+
+    new_chrom = np.add(a_chrom[1:], random_step)
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+    
+    if new_chrom_accur[0][0] > best_chrom[0]:
+      best_chrom = new_chrom_accur[0]
+  
+  return best_chrom
+
+
+def local_search_chroms_v3(a_chrom, num_chrom_params):
+  global best_res
+
+  initial_search_iter = 4 #
+
+  for isi in range(initial_search_iter):
+
+    print("=========================================================")
+    print("initial local search iteration: {}".format(isi+1))
+    print("=========================================================")
+
+    search_vec = [(random.random()*0.2 - 0.1) for i in range(num_chrom_params)]
+    random_neighbour = np.add(a_chrom[1:], search_vec)
+    np.clip(random_neighbour, 0, 0.99999999999, out=random_neighbour)
+
+    new_res, neighbour_chrom_accur = eval_chromosomes([random_neighbour], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+    
+    if neighbour_chrom_accur[0][0] > a_chrom[0] and neighbour_chrom_accur[0][0] > 15.0:
+      new_chrom = random_walk(neighbour_chrom_accur[0], num_chrom_params)
+      return new_chrom
+  
+  return None
+    
+
+def local_search_chroms_v2(chrom1, chrom2, num_chrom_params):
+  global best_res
+
+  best_chrom = chrom1
+  current_chrom = chrom1
+  previous_chrom = chrom2
+
+  max_iterations = 8 # max number of iterations to prevent algorithm being stuck in local search
+  breakout_countdown = 10 - math.ceil(best_chrom[0]/10)  ##### can change  # 10 - math.ceil(initial_chrom[0]/10) # larger values get less iterations  # 10 - math.ceil(best_chrom[0]/10) # larger values get less iterations
+
+  lsi = 1
+  reverse_direction = False
+  while breakout_countdown >= 0 and max_iterations >= 0:
+
+    print("=========================================================")
+    print("local search iteration: {}".format(lsi))
+    print("=========================================================")
+
+    accuracy = current_chrom[0] / 100
+    accuracy_diff = (current_chrom[0] - previous_chrom[0]) / 100
+    if accuracy_diff < 0:
+      reverse_direction = True
+      accuracy_diff = abs(accuracy_diff)
+    elif accuracy_diff <= 0.01:
+      # clip anything between 0% and 1% inclusive accuracy difference to 1%
+      accuracy_diff = 0.01
+    threshold_angle = math.pi/2 * (1 - accuracy_diff) * accuracy
+
+    trajectory = np.subtract(current_chrom[1:], previous_chrom[1:])
+    trajectory = trajectory * accuracy_diff
+    rand_vec = np.random.rand(num_chrom_params) * 0.1
+    rand_vec = rand_vec + trajectory
+
+    # calculate the unit vector for original trajectory and the randomized vector
+    # source: https://stackoverflow.com/a/2827475
+    unit_vec_trajectory = trajectory / np.linalg.norm(trajectory)
+    unit_vec_rand = rand_vec / np.linalg.norm(rand_vec)
+    # calculate the angle between the two vectors
+    angle_between_vec = np.arccos(np.clip(np.dot(unit_vec_trajectory, unit_vec_rand), -1.0, 1.0))
+
+    if not reverse_direction:
+      if angle_between_vec <= threshold_angle:
+      # if their angle is within the threshold angle, then the randomized vector is accepted
+        next_step = rand_vec
+        # next_step = np.multiply(rand_vec, magnitude_ratio)
+      else:
+        # otherwise after some time, the default trajectory will be used
+        next_step = trajectory
+    else:
+      if angle_between_vec > threshold_angle:
+        # only if their angle is within the threshold angle, then the randomized vector is accepted
+        next_step = rand_vec * -1
+        # next_step = np.multiply(rand_vec, magnitude_ratio)
+      else:
+        # otherwise after some time, the default trajectory will be used
+        trajectory = trajectory * -1
+        next_step = trajectory
+    
+    new_chrom = current_chrom[1:] + next_step
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+    
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+
+    # if the newly evaluated chromosome performs better than the currect best chromosome
+    if new_chrom_accur[0][0] > best_chrom[0]:
+      best_chrom = new_chrom_accur[0]
+      breakout_countdown = 10 - math.ceil(best_chrom[0]/10)
+    else:
+      breakout_countdown -= 1
+    
+    max_iterations -= 1
+    previous_chrom = current_chrom
+    current_chrom = new_chrom_accur[0]
+    trajectory = next_step
+    reverse_direction = False
+    lsi += 1
+
+  return best_chrom
+
+
+def local_search_chroms_v1(a_chrom, num_chrom_params):
+  global best_res
+
   step_size = meta['step_size']
   momentum = []
   for i in range(num_chrom_params):
@@ -1165,6 +1378,169 @@ def local_search_chromosome(a_chrom, num_chrom_params):
   return np.concatenate(([best_res[0]], best_res[1]))
 
 
+def local_search_crossover(chrom1, chrom2, a_chrom_acur, crossover_points, num_chrom_params):
+  global best_res
+  # local search:
+  # current crossover point, add step (learning rate) and momentum ([-1, 1])
+  # 1. initialize step
+  # 2. randomly select momentum
+  # 3. multiply step and momentum
+  # 4. add to current crossover point
+  # 5. evaluate new chromosome with new crossover point
+  # 6. if decrease in accuracy^
+  #     - move in other direction*
+  #    else
+  #     - decrease magnitude of momentum and move in same direction
+  # 7. repeat step 3 to 6 until termination criteria reached
+  #
+  # ^next step would be to change momentum with weight with repect to accuracy
+  # *depending on circumstances will have to do different things
+  step_size = meta["step_size"]
+  step_vec = [int((random.randint(0, step_size*2) - step_size)) for i in range(meta['num_crossovers'])]
+  # print(crossover_points)
+  # print(step_vec)
+
+  # keeps a track record of the accuracies during local search
+  acur_record = [a_chrom_acur]
+  crossover_points_record = [crossover_points]
+  acur_ind = 0
+  for lsi in range(meta["local_search_iter"]):
+
+    print("=========================================================")
+    print("local search iteration: {}".format(lsi))
+    print("=========================================================")
+
+    # generate movement vector as the mutation vector for local search
+    movement_vec = np.concatenate(([0], step_vec, [0]))
+    crossover_points = np.add(crossover_points, movement_vec)
+    np.clip(crossover_points, 1, num_chrom_params+1, out=crossover_points)
+    crossover_points_sorted = sorted(crossover_points.tolist())
+
+    new_chrom = []
+    chrom_list = []
+    for xopi in range(len(crossover_points_sorted)-1):
+      if xopi % 2 == 0:
+        parent = chrom1[crossover_points_sorted[xopi]:crossover_points_sorted[xopi+1]]
+      else:
+        parent = chrom2[crossover_points_sorted[xopi]:crossover_points_sorted[xopi+1]]
+
+      new_chrom = np.concatenate((new_chrom, parent))
+
+    chrom_list.append(new_chrom)
+    # Test validation accuracy of new chromosome
+    new_res, new_chrom_acur = eval_chromosomes(chrom_list, num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+    acur_record.append(new_chrom_acur[0][0])
+    crossover_points_record.append(crossover_points)
+    acur_ind += 1
+
+    # --------------------------------------------------------------------------------
+    # --- MODIFIED LOCAL SEARCH ALGORITHM
+    # --------------------------------------------------------------------------------
+
+    # needs work
+    # difference in accuracy
+    #   - accumulative (distance in accuracy between current and original)
+    #   - i iterations
+    #   - weighted mean of previous i iterations <--
+    #   - weighted mean of all previous iterations
+    # actual accuracy
+    #   - compare current accuracy with original accuracy (original as threshold) <--
+
+    # sum_diff = 0.0
+    # if len(acur_record) < 3:
+    #   n_prev_acur = len(acur_record)
+    # else:
+    #   n_prev_acur = 3 # len(acur_record)
+    # for i in range(n_prev_acur):
+    #   sum_diff += (acur_record[len(acur_record)-1-i] - acur_record[len(acur_record)-2-i]) * (1.0 - i/n_prev_acur)
+    #   # sum_diff += (acur_record[len(acur_record)-1-i] - acur_record[len(acur_record)-2-i]) * (1.0 - i*0.1)
+    # weighted_mean_diff = sum_diff / n_prev_acur
+
+    # if weighted_mean_diff <= 0 and new_chrom_acur[0][0] <= a_chrom_acur:
+    #   # worst
+    #   # steps lean towards opposite direction
+    #   # magnitude determined by accuracy / accuracy_diff
+    #   for i in range(len(step_vec)):
+    #     step_vec[i] -= math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+    #   pass
+    # elif weighted_mean_diff <= 0 and new_chrom_acur[0][0] > a_chrom_acur:
+    #   # potentially bad
+    #   # steps have higher chance of leaning towards opposite direction
+    #   # magnitude determined by accuracy / accuracy_diff
+    #   if random.random() < 1 - new_chrom_acur[0][0]:
+    #     for i in range(len(step_vec)):
+    #       step_vec[i] -= math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+    #   else:
+    #     for i in range(len(step_vec)):
+    #       step_vec[i] += math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+    #   pass
+    # elif weighted_mean_diff > 0 and new_chrom_acur[0][0] <= a_chrom_acur:
+    #   # potentially good
+    #   # steps have higher chance of leaning towards current direction
+    #   # magnitude determined by accuracy / accuracy_diff
+    #   if random.random() < new_chrom_acur[0][0]:
+    #     for i in range(len(step_vec)):
+    #       step_vec[i] += math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+    #   else:
+    #     for i in range(len(step_vec)):
+    #       step_vec[i] -= math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+    #   pass
+    # elif weighted_mean_diff > 0 and new_chrom_acur[0][0] > a_chrom_acur:
+    #   # best
+    #   # steps lean towards current direction
+    #   # magnitude determined by accuracy / accuracy_diff
+    #   for i in range(len(step_vec)):
+    #     step_vec[i] += math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+    #   pass
+
+    # for i in range(1, len(movement_vec)-1):
+    #   if random.random() < new_chrom_acur[0][0]:
+    #     movement_vec[i] = math.floor(movement_vec[i] * random.random())
+    #   else:
+    #     movement_vec[i] = - math.floor(movement_vec[i] * random.random())
+    
+
+    # --------------------------------------------------------------------------------
+    # --- ORIGINAL LOCAL SEARCH ALGORITHM
+    # --------------------------------------------------------------------------------
+    
+    if acur_record[acur_ind] > acur_record[acur_ind - 1]:
+      # if current accuracy is better than previous accuracy
+      if acur_ind - 2 >= 0:
+        if acur_record[acur_ind] - acur_record[acur_ind - 1] > acur_record[acur_ind - 1] - acur_record[acur_ind - 2]:
+          # if current iteration's accuracy improvement is better than previous iteration's
+          for i in range(len(step_vec)):
+            step_vec[i] += math.floor(random.randint(0, step_size+3) * new_chrom_acur[0][0])
+          # momentum *= 1.1
+        else:
+          # if current iteration's accuracy improvement is worse than previous iteration's
+          for i in range(len(step_vec)):
+            step_vec[i] += math.floor(random.randint(0, step_size-6) * new_chrom_acur[0][0])
+          # momentum *= 0.8
+      # else, retain momentum
+    else:
+      # if current accuracy is worse than or equal to previous accuracy
+      if acur_ind - 2 >= 0:
+        if acur_record[acur_ind] - acur_record[acur_ind - 1] > acur_record[acur_ind - 1] - acur_record[acur_ind - 2]:
+          # if current iteration's accuracy regression is less than previous iteration's
+          for i in range(len(step_vec)):
+            step_vec[i] += math.floor(random.randint(0, step_size+3) * new_chrom_acur[0][0])
+          # momentum *= 1.1
+        else:
+          # if current iteration's accuracy regression is more than previous iteration's
+          for i in range(len(step_vec)):
+            step_vec[i] -= math.floor(random.randint(0, step_size-6) * new_chrom_acur[0][0])
+          # momentum *= -0.8
+      else:
+        # else, go in opposite direction
+        for i in range(len(step_vec)):
+          step_vec[i] -= math.floor(random.randint(0, step_size) * new_chrom_acur[0][0])
+        # momentum *= -1.0
+
+  return np.concatenate(([best_res[0]], best_res[1]))
+
 # -----------------------------------------------------------------------------
 # population-based search functions
 
@@ -1176,8 +1552,48 @@ def mutate_offspring(chrom, num_chrom_params):
   
   return chrom
 
+
+def crossover_chroms_v2(chroms_list, num_chrom_params):
+  global best_res
+
+  offspring_param_ind = [[random.randint(0, len(chroms_list)-1) for i in range(num_chrom_params)] for j in range(len(chroms_list))]
+
+  offsprings_list = []
+  for ind_list in offspring_param_ind:
+    offspring = []
+    for j in range(num_chrom_params):
+      offspring.append(chroms_list[ind_list[j]][j+1])
+    offsprings_list.append(np.array(offspring))
+  
+  new_res, mat_chrom_acur = eval_chromosomes(offsprings_list, num_chrom_params)
+  if new_res[0] > best_res[0]:
+    best_res = new_res
+  
+  mat_chrom_sorted = sorted(mat_chrom_acur.tolist(), reverse=True)
+  new_offsprings_list = []
+  for i in range(len(mat_chrom_sorted)):
+    # new_offspring = local_search_chroms_v3(mat_chrom_sorted[i], num_chrom_params)
+    if len(mat_chrom_sorted) <= 1:
+      new_offspring = local_search_chroms_v2(np.array(mat_chrom_sorted[i]), np.concatenate(([best_res[0]], best_res[1])), num_chrom_params)
+    else:
+      while True:
+        rand_ind = random.randint(0, len(mat_chrom_sorted)-1)
+        if rand_ind != i:
+          break
+      chrom2 = mat_chrom_sorted[rand_ind]
+      new_offspring = local_search_chroms_v2(np.array(mat_chrom_sorted[i]), np.array(chrom2), num_chrom_params)
+    
+    if new_offspring is None:
+      new_offspring = mat_chrom_sorted[i]
+    else:
+      new_offspring = new_offspring.tolist()
+    new_offsprings_list += [new_offspring]
+
+  return new_offsprings_list
+
+
 # functions performing crossover of genetic information between two parent chromosomes
-def crossover_chroms(chrom1, chrom2, num_chrom_params):
+def crossover_chroms_v1(chrom1, chrom2, num_chrom_params):
   global best_res
 
   # # --- Local search for best crossover point(s)
@@ -1187,7 +1603,6 @@ def crossover_chroms(chrom1, chrom2, num_chrom_params):
   offspring_1 = []
   offspring_2 = []
   for xopi in range(len(crossover_points)-1):
-
     if xopi % 2 == 0:
       parent_1 = chrom1[crossover_points[xopi]:crossover_points[xopi+1]]
       parent_2 = chrom2[crossover_points[xopi]:crossover_points[xopi+1]]
@@ -1201,33 +1616,74 @@ def crossover_chroms(chrom1, chrom2, num_chrom_params):
   # mutate offsprings
   offspring_1 = mutate_offspring(offspring_1, num_chrom_params)
   offspring_2 = mutate_offspring(offspring_2, num_chrom_params)
-
   offsprings.append(offspring_1)
   offsprings.append(offspring_2)
 
   # Test validation accuracies of offsprings
   new_res, mat_chrom_acur = eval_chromosomes(offsprings, num_chrom_params)
-
   if new_res[0] > best_res[0]:
     best_res = new_res
   
   # --- local search to find local maximum
-  best_offspring_1 = local_search_chromosome(mat_chrom_acur[0], num_chrom_params)
-  best_offspring_2 = local_search_chromosome(mat_chrom_acur[1], num_chrom_params)
-  new_offsprings = np.concatenate(([best_offspring_1], [best_offspring_2]))
+  # best_offspring_1 = local_search_crossover(chrom1, chrom2, mat_chrom_acur[0][0], crossover_points, num_chrom_params)
+  # best_offspring_2 = local_search_crossover(chrom2, chrom1, mat_chrom_acur[1][0], crossover_points, num_chrom_params)
+  # best_offspring_1 = local_search_chroms_v1(mat_chrom_acur[0], num_chrom_params)
+  # best_offspring_2 = local_search_chroms_v1(mat_chrom_acur[1], num_chrom_params)
+  best_offspring_1 = local_search_chroms_v2(mat_chrom_acur[0], mat_chrom_acur[1], num_chrom_params)
+  best_offspring_2 = local_search_chroms_v2(mat_chrom_acur[1], mat_chrom_acur[0], num_chrom_params)
+  # # best_offspring_1 = local_search_chroms_v3(mat_chrom_acur[0], num_chrom_params)
+  # best_offspring_2 = local_search_chroms_v3(mat_chrom_acur[1], num_chrom_params)
+  if best_offspring_1 is None:
+    best_offspring_1 = mat_chrom_acur[0]
+  if best_offspring_2 is None:
+    best_offspring_2 = mat_chrom_acur[1]
+  new_offsprings = [best_offspring_1.tolist()] + [best_offspring_2.tolist()]
+  # new_offsprings = np.concatenate(([best_offspring_1], [best_offspring_2]))
 
+  # if mat_chrom_acur[0][0] > mat_chrom_acur[1][0]:
+  #   # new_offsprings = local_search_crossover(chrom1, chrom2, mat_chrom_acur[0][0], crossover_points, num_chrom_params)
+  #   new_offsprings = local_search_chroms(mat_chrom_acur[0], num_chrom_params)
+  #   # new_offsprings = np.concatenate(([best_offspring], [mat_chrom_acur[1]]))
+  # else:
+  #   # new_offsprings = local_search_crossover(chrom2, chrom1, mat_chrom_acur[1][0], crossover_points, num_chrom_params)
+  #   new_offsprings = local_search_chroms(mat_chrom_acur[1], num_chrom_params)
+  #   # new_offsprings = np.concatenate(([best_offspring], [mat_chrom_acur[0]]))
+
+  # return [new_offsprings.tolist()]
   return new_offsprings
 
-# function for generating offsprings from the current population
-def generate_offsprings(chroms_list, num_chrom_params):
 
+def genetic_algorithm_v2(chroms_list, num_chrom_params):
+  gen_algo_iter = 3
+
+  max_crossover = math.floor(len(chroms_list)/2) #
+
+  offsprings = []
+  chroms_list = sorted(chroms_list, reverse=True)
+
+  for gai in range(gen_algo_iter):
+
+    print("=========================================================")
+    print("offspring generation iteration: {}".format(gai+1))
+    print("=========================================================")
+    
+    best_offsprings_local = crossover_chroms_v2(chroms_list[0:max_crossover], num_chrom_params)
+    offsprings += best_offsprings_local
+
+  return offsprings
+
+
+# function for generating offsprings from the current population
+def genetic_algorithm_v1(chroms_list, num_chrom_params):
   # for preventing occurance of duplicate pairs when selected parents for crossover
   selected_pairs = [-1 for i in range(len(chroms_list))]
+  offsprings = []
 
-  for goi in range(math.ceil(meta['num_offsprings']/2)):
+  for goi in range(math.floor(len(chroms_list)/2)):
 
     print("=========================================================")
     print("offspring generation iteration: {}".format(goi))
+    # print("Number of chromosomes: {}".format(len(chroms_list)))
     print("=========================================================")
 
     # weights are equal, tournament style choosing
@@ -1238,12 +1694,17 @@ def generate_offsprings(chroms_list, num_chrom_params):
     chrom2 = chroms_list[ind_chrom2]
 
     selected_pairs[ind_chrom2] = goi
+
+    # # two consecutive chromosomes
+    # if goi == meta['num_offsprings'] - 1:
+    #   chrom1 = chroms_list[0][1:]
+    #   chrom2 = chroms_list[2][1:]
+    # else:
+    #   chrom1 = chroms_list[goi][1:]
+    #   chrom2 = chroms_list[(goi+1) % meta['num_offsprings']][1:]
     
-    best_offsprings_local = crossover_chroms(chrom1, chrom2, num_chrom_params)
-    if goi == 0:
-      offsprings = best_offsprings_local
-    else:
-      offsprings = np.concatenate((offsprings, best_offsprings_local))
+    best_offsprings_local = crossover_chroms_v1(chrom1, chrom2, num_chrom_params)
+    offsprings += best_offsprings_local
 
   return offsprings
 
@@ -1290,10 +1751,10 @@ def final_test(a_model):
 starting_time = time.time() # starting time to keep track of the total time taken to complete
 all_accur_valid = []  # data of validation accuracy of each trial is stored here
 all_accur_final = []  # data of final accuracy of each trial is store here
-# all_average_loss = [[],[]] # data if average loss if both validation accuracy and final accuracy are stored here
+all_average_loss = [[],[]] # data if average loss if both validation accuracy and final accuracy are stored here
 
-trials = 20
-for _ in range(trials):
+trials = 1
+for ti in range(trials):
 
   do_eval_iter = 0
 
@@ -1353,39 +1814,56 @@ for _ in range(trials):
   # population-based search
 
   num_chrom_params = best_chromosome.shape[0]
-  next_best_initial_chrom_ind = 1
 
   best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
 
-  for iteration in range(meta['population_search_iter']):
+  psi = 1
+  terminate_search = False
+  increase_pop = False
+  while not terminate_search:
     
     # # --- Population based search
+    print("========================================================={}".format(ti))
+    print("population search iteration: {}".format(psi))
     print("=========================================================")
-    print("population search iteration: {}".format(iteration))
-    print("=========================================================")
 
-    # generate offsprings from current generation
-    offsprings = generate_offsprings(mat_chroms, num_chrom_params)
-    next_gen_pop = np.concatenate((mat_chroms[0:(len(mat_chroms) - len(offsprings) - 1)], offsprings))
-    next_gen_pop = sorted(next_gen_pop.tolist(), reverse=True)
-    # # differential search between offsprings and mat_chroms
-    # diff_chromosomes = differential_search(mat_chroms, offsprings, meta['num_differential_sol'], num_chrom_params)
-    
-    mat_chroms = sorted(next_gen_pop.tolist(), reverse=True)
+    """
+    evaluate population
+    sort by best to worst
+    for best few, perform ga crossover, and within those few select best few to do local search
+    for worst few, perform differential search
+    if after differential search the chromosome has no improvement, remove the chromosome
+    repeat until population in below p
+    after that, increase population by differential search (or other means) until certain threshold is met
+    """
 
-    # # --- Differential evolution
-    diff_chromosomes = do_diff_chrom_v2(np.asarray(mat_chroms), meta['num_differential_sol'], num_chrom_params)
-    new_res, diff_chrom_accur = eval_chromosomes(diff_chromosomes, num_chrom_params)
+    # select best few chromosomes within the population to perform crossover and generate offsprings from
+    offsprings = genetic_algorithm_v1(mat_chroms[0:math.floor(len(mat_chroms)/2)], num_chrom_params)
 
-    if new_res[0] > best_res[0]:
-      best_res = new_res
+    # for the worst few performing chromosomes, perform differential search to find better chromosomes
+
+    # if population is below a certain number of chroms, add the new chromosomes into the population
+    if len(mat_chroms) < meta['min_pop_size']:
+      increase_pop = True
+    else:
+      increase_pop = False
+    diff_chromosomes = differential_search(mat_chroms, increase_pop, num_chrom_params)
+
+    # compare the worst few chromosomes with the chromosomes from differential search
+    # if there is improvement, replace with new chromosome, else remove chromosome from the population
+    # combine the chromosomes from genetic algorithm and differential search
+
+    next_generation = offsprings + diff_chromosomes[len(offsprings):]
+    mat_chroms = sorted(next_generation, reverse=True)
     
     print('======================================')
     print('Best accuracy so far: {}'.format(best_res[0]))
     print('======================================')
 
-    mat_chrom_accur = np.concatenate((mat_chroms[0:(len(mat_chroms) - len(diff_chrom_accur))], diff_chrom_accur))
-    mat_chroms = sorted(mat_chrom_accur.tolist(), reverse=True)
+    # mat_chrom_accur = np.concatenate((mat_chroms[0:(len(mat_chroms) - len(diff_chrom_accur))], diff_chrom_accur))
+    # mat_chroms = sorted(mat_chrom_accur.tolist(), reverse=True)
+
+    psi += 1
     
 
   # -----------------------------------------------------------------------------------------------------------
@@ -1421,10 +1899,10 @@ for _ in range(trials):
   print('=====================================')
   print('Model with best validation accuracy: ')
   accur_valid, test_loss = final_test(best_validation_model)
-  # all_average_loss[0].append(test_loss.item())
+  all_average_loss[0].append(test_loss.item())
   print('Model at the end of training: ')
   accur_final, test_loss = final_test(best_final_model)
-  # all_average_loss[1].append(test_loss.item())
+  all_average_loss[1].append(test_loss.item())
 
   # max_accur = int(max(accur_valid, accur_final))
   # print("The max accuracy is: {}".format(max_accur))
@@ -1436,6 +1914,7 @@ valid_accuracies = [i.item() for i in all_accur_valid]
 final_accuracies = [i.item() for i in all_accur_final]
 print("All valid accuracies: {}".format(valid_accuracies))
 print("All final accuracies: {}".format(final_accuracies))
+print("All average validation loss: {}".format(all_average_loss[0]))
 
 print("Mean accuracy:         {}".format(np.mean(valid_accuracies)))
 print("Standard deviation:    {}".format(np.std(valid_accuracies)))

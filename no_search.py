@@ -790,6 +790,7 @@ def comp_num_chrom_param(limits):
   # Num. of post-branch parameters
   tot_post_branch = 1+(6*limits['max_post_branch_layers'])
 
+  # 4 + 31 + 310 + 31 = 376
   return tot_train_param+tot_pre_branch+tot_branch+tot_post_branch
 
 # Interpret learning rate and momentum parameters
@@ -914,20 +915,23 @@ import math
 
 # --- Architectural search parameters
 meta = {}
-meta['max_rs_iter'] = 6 # 10  # initial random search
-meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
+meta['max_rs_iter'] = 10 # 6 # 10  # initial random search
+meta['min_pop_size'] = 5 # minimum population size
 meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
 meta['diff_lr'] = 0.4 # 0.5 # 0.1 # learning rate for differential search
-meta['num_neighbours'] = 8 # 16 
-meta['neighbour_range'] = 0.2  # 0.4  # mutation rate for stochastic hill-climbing
 
 # --- Population based search parameters (genetic algorithm)
-# meta['population_search_iter'] = 6  # population based genetic algorithm search iteration
-meta['mutation_rate'] = 0.2 # mutation rate of a newly generated chromosome
 
 meta['local_search_iter'] = 4 # number of local search iterations
 meta['step_size'] = 0.1 # step size for local search
 
+meta['diff_search_iter'] = 4
+
+# testing parameters
+testing = {}
+testing['take_previous'] = 0
+testing['take_random'] = 0
+# testing['limit_numbers'] = [0 for i in range(10)]
 
 # -----------------------------------------------------------------------------
 # preparations functions
@@ -1001,6 +1005,417 @@ def eval_chromosomes(list_chromosomes,num_chrom_params):
 
 
 # -----------------------------------------------------------------------------
+# differential search functions
+
+def differential_search_v1(a_chrom, good_solutions, bad_solutions, num_chrom_params):
+  global best_res, thresh_increase_rate
+
+  new_chromosomes = []
+
+  if len(good_solutions) == 0:
+    solutions_list = np.array(bad_solutions)
+  elif len(bad_solutions) == 0:
+    solutions_list = np.array(good_solutions)
+  else:
+    solutions_list = np.concatenate((good_solutions, bad_solutions))
+  
+  if len(solutions_list) < 2:
+    return a_chrom
+  
+  random.shuffle(solutions_list)
+  while True:
+    rand_chrom1 = random.randint(0, len(solutions_list)-1)
+    rand_chrom2 = random.randint(0, len(solutions_list)-1)
+    if rand_chrom1 != rand_chrom2:
+      break
+  rand_chrom1 = solutions_list[rand_chrom1]
+  rand_chrom2 = solutions_list[rand_chrom2]
+  
+  for dsi in range(meta['diff_search_iter']):
+
+    print("=========================================================")
+    print("differential search iteration: {}".format(dsi+1))
+    print("=========================================================")
+
+    difference_accur = (rand_chrom1[0] - rand_chrom2[0]) / 100
+    difference_vec = np.subtract(rand_chrom1[1:], rand_chrom2[1:])
+
+    directed_vec = np.multiply(difference_vec, difference_accur)
+    new_chrom = np.add(a_chrom[1:], directed_vec)
+
+    # # damping trajectory
+    # for k in range(len(new_chrom)):
+    #   if new_chrom[k] == 1.0:
+    #     new_chrom[k] = 0.99999999999
+    #   elif new_chrom[k] == 0.0:
+    #     new_chrom[k] = 0.00000000001
+    #   elif new_chrom[k] > 1.0:
+    #     new_chrom[k] = new_chrom[k] - directed_vec[k]
+    #     adjustment = (1.0 - new_chrom[k]) * 0.5
+    #     new_chrom[k] += adjustment
+    #   elif new_chrom[k] < 0.0:
+    #     new_chrom[k] = new_chrom[k] - directed_vec[k]
+    #     adjustment = new_chrom[k] * 0.5
+    #     new_chrom[k] -= adjustment
+
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      thresh_increase_rate += (new_res[0] - best_res[0])/5
+      best_res = new_res
+
+    new_chromosomes.append(new_chrom_accur[0].tolist())
+  
+  return max(new_chromosomes)
+
+
+def differential_search_v2(chroms_list, good_solutions, bad_solutions, num_chrom_params):
+  global best_res
+
+  new_chromosomes = []
+  dsi = 0
+  for dsi in range(len(chroms_list)):
+
+    print("=========================================================")
+    print("differential search iteration: {}".format(dsi))
+    print("=========================================================")
+
+    good_sol = random.choice(good_solutions)
+    bad_sol = random.choice(bad_solutions)
+    chrom = random.choice(chroms_list)
+
+    difference_accur = (good_sol[0] - bad_sol[0]) / 100
+    difference_vec = np.subtract(good_sol[1:], bad_sol[1:])
+
+    directed_vec = np.multiply(difference_vec, difference_accur)
+    new_chrom = np.add(chrom[1:], directed_vec)
+    
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+    
+    new_chromosomes.append(new_chrom_accur[0].tolist())
+
+  sorted_new_chroms = sorted(new_chromosomes, reverse=True)
+  for a_chrom in sorted_new_chroms:
+    if a_chrom[0] > min(chroms_list.tolist())[0]:# and random.random() < 1 - (min(chroms_list)[0]/100):
+      chroms_list[chroms_list.tolist().index(min(chroms_list.tolist()))] = a_chrom
+
+  # considering changing to have elimination / production
+  return chroms_list
+
+
+def differential_search_v4(chroms_list, bad_chroms_ind, good_solutions, increase_pop, num_chrom_params):
+  global best_res, thresh_increase_rate
+
+  new_chromosomes = []
+  if increase_pop:
+    num_chroms = len(chroms_list)
+  else:
+    num_chroms = len(bad_chroms_ind)
+    if num_chroms > math.floor(len(chroms_list)/2):
+      num_chroms = math.floor(len(chroms_list)/2)
+
+  for dsi in range(num_chroms):
+
+    print("=========================================================")
+    print("differential search iteration: {}".format(dsi+1))
+    print("=========================================================")
+    
+    if len(good_solutions) <= 2:
+      solutions_list = np.concatenate((good_solutions, chroms_list))
+      random.shuffle(solutions_list)
+    else:
+      solutions_list = good_solutions
+    
+    while True:
+      rand_chrom1 = random.randint(0, len(solutions_list)-1)
+      rand_chrom2 = random.randint(0, len(solutions_list)-1)
+      if rand_chrom1 != rand_chrom2:
+        break
+    rand_chrom1 = solutions_list[rand_chrom1]
+    rand_chrom2 = solutions_list[rand_chrom2]
+
+    difference_accur = (rand_chrom1[0] - rand_chrom2[0]) / 100
+    difference_vec = np.subtract(rand_chrom1[1:], rand_chrom2[1:])
+    directed_vec = np.multiply(difference_vec, difference_accur)
+    if increase_pop:
+      new_chrom = np.add(random.choice(chroms_list)[1:], directed_vec)
+    else:
+      new_chrom = np.add(chroms_list[bad_chroms_ind[dsi]][1:], directed_vec)
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      thresh_increase_rate += (new_res[0] - best_res[0])/5
+      best_res = new_res
+    
+    if increase_pop:
+      new_chromosomes.append(new_chrom_accur[0])
+    else:
+      if new_chrom_accur[0][0] > chroms_list[bad_chroms_ind[dsi]][0]:
+        new_chromosomes.append(new_chrom_accur[0])
+
+  return new_chromosomes
+
+
+def differential_search_v3(chroms_list, bad_chroms_ind, good_solutions, bad_solutions, increase_pop, num_chrom_params):
+  global best_res, thresh_increase_rate
+
+  new_chromosomes = []
+  if increase_pop:
+    num_chroms = len(chroms_list)
+  else:
+    num_chroms = len(bad_chroms_ind)
+    if num_chroms > math.floor(len(chroms_list)/2):
+      num_chroms = math.floor(len(chroms_list)/2)
+  solutions_list = np.concatenate((good_solutions, bad_solutions))
+  random.shuffle(solutions_list)
+
+  for dsi in range(num_chroms):
+
+    print("=========================================================")
+    print("differential search iteration: {}".format(dsi+1))
+    print("=========================================================")
+    
+    while True:
+      rand_chrom1 = random.randint(0, len(solutions_list)-1)
+      rand_chrom2 = random.randint(0, len(solutions_list)-1)
+      if rand_chrom1 != rand_chrom2:
+        break
+    rand_chrom1 = solutions_list[rand_chrom1]
+    rand_chrom2 = solutions_list[rand_chrom2]
+
+    difference_accur = (rand_chrom1[0] - rand_chrom2[0]) / 100
+    difference_vec = np.subtract(rand_chrom1[1:], rand_chrom2[1:])
+    directed_vec = np.multiply(difference_vec, difference_accur)
+    if increase_pop:
+      new_chrom = np.add(random.choice(chroms_list)[1:], directed_vec)
+    else:
+      new_chrom = np.add(chroms_list[bad_chroms_ind[dsi]][1:], directed_vec)
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      thresh_increase_rate += (new_res[0] - best_res[0])/5
+      best_res = new_res
+    
+    if increase_pop:
+      new_chromosomes.append(new_chrom_accur[0])
+    else:
+      if new_chrom_accur[0][0] > chroms_list[bad_chroms_ind[dsi]][0]:
+        new_chromosomes.append(new_chrom_accur[0])
+
+  return new_chromosomes
+
+
+# -----------------------------------------------------------------------------
+# local search functions
+
+def local_search_v2(chrom1, chrom2, num_chrom_params):
+  global best_res
+
+  best_chrom = chrom1
+  current_chrom = chrom1
+  previous_chrom = chrom2
+
+  max_iterations = 8 # max number of iterations to prevent algorithm being stuck in local search
+  breakout_countdown = 8 - math.ceil(best_chrom[0]/20)
+
+  lsi = 1
+  reverse_direction = False
+  while breakout_countdown >= 0 and max_iterations >= 0:
+
+    print("=========================================================")
+    print("local search iteration: {}".format(lsi+1))
+    print("=========================================================")
+
+    accuracy = current_chrom[0] / 100
+    accuracy_diff = (current_chrom[0] - previous_chrom[0]) / 100
+    if accuracy_diff < 0:
+      reverse_direction = True
+      accuracy_diff = abs(accuracy_diff)
+    elif accuracy_diff <= 0.01:
+      # clip anything between 0% and 1% inclusive accuracy difference to 1%
+      accuracy_diff = 0.01
+    threshold_angle = math.pi/2 * (1 - accuracy_diff) * accuracy
+
+    trajectory = np.subtract(current_chrom[1:], previous_chrom[1:])
+    trajectory = trajectory * accuracy_diff
+    rand_vec = np.random.rand(num_chrom_params) * 0.1
+    rand_vec = rand_vec + trajectory
+
+    # calculate the unit vector for original trajectory and the randomized vector
+    # source: https://stackoverflow.com/a/2827475
+    unit_vec_trajectory = trajectory / np.linalg.norm(trajectory)
+    unit_vec_rand = rand_vec / np.linalg.norm(rand_vec)
+    # calculate the angle between the two vectors
+    angle_between_vec = np.arccos(np.clip(np.dot(unit_vec_trajectory, unit_vec_rand), -1.0, 1.0))
+
+    if not reverse_direction:
+      if angle_between_vec <= threshold_angle:
+      # if their angle is within the threshold angle, then the randomized vector is accepted
+        next_step = rand_vec
+        # next_step = np.multiply(rand_vec, magnitude_ratio)
+      else:
+        # otherwise after some time, the default trajectory will be used
+        next_step = trajectory
+    else:
+      if angle_between_vec > threshold_angle:
+        # only if their angle is within the threshold angle, then the randomized vector is accepted
+        next_step = rand_vec * -1
+        # next_step = np.multiply(rand_vec, magnitude_ratio)
+      else:
+        # otherwise after some time, the default trajectory will be used
+        trajectory = trajectory * -1
+        next_step = trajectory
+    
+    new_chrom = current_chrom[1:] + next_step
+    np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+    
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      best_res = new_res
+
+    # if the newly evaluated chromosome performs better than the currect best chromosome
+    if new_chrom_accur[0][0] > best_chrom[0]:
+      best_chrom = new_chrom_accur[0]
+      breakout_countdown = 10 - math.ceil(best_chrom[0]/10)
+    else:
+      breakout_countdown -= 1
+    
+    max_iterations -= 1
+    previous_chrom = current_chrom
+    current_chrom = new_chrom_accur[0]
+    trajectory = next_step
+    reverse_direction = False
+    lsi += 1
+
+  return best_chrom
+
+
+def local_search(a_chrom, prev_chrom, num_chrom_params, pop_search_iter):
+  global best_res, thresh_increase_rate, local_search_iter, testing
+
+  best_chrom = a_chrom
+
+  current_chrom = a_chrom
+  previous_chrom = prev_chrom
+
+  max_iterations = math.floor(pop_search_iter * 0.2) + 3 # max number of iterations to prevent algorithm being stuck in local search
+  breakout_countdown = 10 - math.ceil(best_chrom[0]/10)
+  lsi = 0
+  reverse_direction = False
+  while breakout_countdown >= 0 and max_iterations >= 0:
+
+    print("=========================================================")
+    print("local search iteration: {}".format(lsi))
+    print("=========================================================")
+
+    accuracy = current_chrom[0] / 100
+    accuracy_diff = (current_chrom[0] - previous_chrom[0]) / 100
+    if accuracy_diff < 0:
+      reverse_direction = True
+      accuracy_diff = abs(accuracy_diff)
+    threshold_angle = math.pi/2 * (1 - accuracy_diff) * accuracy
+
+    trajectory = np.subtract(current_chrom[1:], previous_chrom[1:])
+    trajectory = trajectory * accuracy_diff
+    rand_vec = np.random.rand(num_chrom_param) * 0.1
+    rand_vec = rand_vec + trajectory
+
+    # calculate the unit vector for original trajectory and the randomized vector
+    # source: https://stackoverflow.com/a/2827475
+    unit_vec_trajectory = trajectory / np.linalg.norm(trajectory)
+    unit_vec_rand = rand_vec / np.linalg.norm(rand_vec)
+    # calculate the angle between the two vectors
+    angle_between_vec = np.arccos(np.clip(np.dot(unit_vec_trajectory, unit_vec_rand), -1.0, 1.0))
+
+    if not reverse_direction:
+      if angle_between_vec <= threshold_angle:
+      # if their angle is within the threshold angle, then the randomized vector is accepted
+        testing['take_random'] += 1
+        next_step = rand_vec
+      else:
+        # otherwise after some time, the default trajectory will be used
+        testing['take_previous'] += 1
+        next_step = trajectory
+    else:
+      if angle_between_vec > threshold_angle:
+        # only if their angle is within the threshold angle, then the randomized vector is accepted
+        testing['take_random'] += 1
+        next_step = rand_vec * -1
+      else:
+        # otherwise after some time, the default trajectory will be used
+        testing['take_previous'] += 1
+        trajectory = trajectory * -1
+        next_step = trajectory
+    
+    new_chrom = current_chrom[1:] + next_step
+    
+    # damping trajectory
+    for k in range(len(new_chrom)):
+      if new_chrom[k] == 1.0:
+        new_chrom[k] = 0.99999999999
+      elif new_chrom[k] == 0.0:
+        new_chrom[k] = 0.00000000001
+      elif new_chrom[k] > 1.0:
+        new_chrom[k] = new_chrom[k] - next_step[k]
+        adjustment = (1.0 - new_chrom[k]) * 0.5
+        new_chrom[k] += adjustment
+      elif new_chrom[k] < 0.0:
+        new_chrom[k] = new_chrom[k] - next_step[k]
+        adjustment = new_chrom[k] * 0.5
+        new_chrom[k] -= adjustment
+    
+    new_res, new_chrom_accur = eval_chromosomes([new_chrom], num_chrom_params)
+    if new_res[0] > best_res[0]:
+      thresh_increase_rate += (new_res[0] - best_res[0])/5
+      best_res = new_res
+
+    # if the newly evaluated chromosome performs better than the currect best chromosome
+    if new_chrom_accur[0][0] > best_chrom[0]:
+      best_chrom = new_chrom_accur[0]
+      breakout_countdown = 10 - math.ceil(best_chrom[0]/10)
+    else:
+      breakout_countdown -= 1
+    
+    max_iterations -= 1
+    previous_chrom = current_chrom
+    current_chrom = new_chrom_accur[0]
+    trajectory = next_step
+    reverse_direction = False
+    lsi += 1
+
+  return best_chrom
+
+
+def mutate_chroms(chroms_list):
+  global best_res, thresh_increase_rate
+
+  new_chroms = []
+  for a_chrom in chroms_list:
+    for j in range(1, len(a_chrom)):
+      if random.random() < 0.2:
+        a_chrom[j] = random.random()
+    
+    new_chroms.append(a_chrom[1:])
+
+  new_res, new_chrom_accur = eval_chromosomes(new_chroms, num_chrom_params)
+  new_chroms = []
+  for a_chrom in new_chrom_accur:
+    new_chroms.append(a_chrom)
+  if new_res[0] > best_res[0]:
+    thresh_increase_rate += (new_res[0] - best_res[0])/5
+    best_res = new_res
+  
+  print(new_chroms)
+  return new_chroms
+  
+
+# -----------------------------------------------------------------------------
 # final evaluation functions
 
 def final_test(a_model):
@@ -1042,7 +1457,11 @@ def final_test(a_model):
 starting_time = time.time() # starting time to keep track of the total time taken to complete
 all_accur_valid = []  # data of validation accuracy of each trial is stored here
 all_accur_final = []  # data of final accuracy of each trial is store here
-# all_average_loss = [[],[]] # data if average loss if both validation accuracy and final accuracy are stored here
+all_average_loss = [[],[]] # data if average loss if both validation accuracy and final accuracy are stored here
+
+# best_models_list = []
+# best_chromosomes_list = []
+# best_train_params_list = []
 
 trials = 20 # 20
 for ti in range(trials):
@@ -1055,15 +1474,31 @@ for ti in range(trials):
   local_search_iter = 0
   diff_search_iter = 0
 
-  terminate_search = False
-  while do_eval_iter < 250:
+  # list to store all initial search generated chromosomes
+  mat_chroms = [[0 for x in range(comp_num_chrom_param(limits)+1)] for y in range(meta['max_rs_iter'])]
+
+
+  # ---------------------------------------------------------------------------------------------------------
+  # initial search
+
+  # Start with a small search
+  print('Initial random search ...')
+  
+  for rsi in range(meta['max_rs_iter']):
+
+    if args['verbose_meta']:
+      print('Search iteration {}.'.format(rsi+1))
 
     num_chrom_param = comp_num_chrom_param(limits)
 
     a_rand_chrom = gen_rand_chromosome(num_chrom_param)
+    # a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for i in range(num_chrom_param)])
+    # if rsi == 0 or rsi == 1:
+    #   a_rand_chrom = np.asarray([0.99999999999 for i in range(num_chrom_param)])
+    # else:
+    #   a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for i in range(num_chrom_param)])
 
     # --- Actual training
-    print('Do evals: {}'.format(do_eval_iter))
     model, train_params = prepare_model(a_rand_chrom)
     model, valid_accurs, train_accurs = do_eval_chrom(model, train_params, args['num_epochs_search'])
     best_valid_accur = max(valid_accurs)
@@ -1076,7 +1511,281 @@ for ti in range(trials):
       best_train_params = train_params
       best_chromosome = a_rand_chrom
 
-      best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
+    meta_rs_valids.append(best_valid_accur)
+    # adds the generated chromosome with its accuracy into the list
+    mat_chroms[rsi][0] = best_valid_accur
+    mat_chroms[rsi][1:] = a_rand_chrom
+  
+  print('*****************************************************{}'.format(ti))
+  print('Best accuracy after initial random search: {}'.format(best_model_accur))
+  print('*****************************************************')
+
+  if args['verbose_meta']:
+    print('Best validation errors:')
+    print(meta_rs_valids)
+
+  num_chrom_params = best_chromosome.shape[0]
+  next_best_initial_chrom_ind = 1
+
+  best_res = (best_model_accur, best_chromosome, best_model, best_train_params)
+
+  # -----------------------------------------------------------------------------------------------------------
+  # population-based search
+
+  # generate initial direction vector for each chromosome
+  direction_vec = [np.random.rand(num_chrom_param)*0.2 for i in range(meta['max_rs_iter'])]
+  direction_vec = [[i[j]-0.1 for j in range(len(direction_vec[0]))] for i in direction_vec]
+
+  good_solutions = []
+  bad_solutions = []
+  good_sol_thresh = 15
+  bad_sol_thresh = 0 # 5
+  good_sol_radius = 6 # 11.5  # 6  # impact radius for good solutions
+  bad_sol_radius = 6  # 11.5  # 6  # impact radius for bad solutions
+
+  accuracy_thresh = 12.0
+
+  sorted_mat_chroms = sorted(mat_chroms, reverse=True)
+  good_solutions.append(sorted_mat_chroms[0])
+  good_solutions.append(sorted_mat_chroms[1])
+  for i, a_chrom in enumerate(mat_chroms):
+    if a_chrom[0] <= accuracy_thresh:
+      bad_solutions.append(a_chrom)
+    else:
+      if a_chrom not in good_solutions:
+        good_solutions.append(a_chrom)
+
+  # sorted_mat_chroms = sorted(mat_chroms, reverse=True)
+  # good_solutions.append(sorted_mat_chroms[0])
+  # for i, a_chrom in enumerate(sorted_mat_chroms[1:]):
+  #   if a_chrom[0] <= accuracy_thresh:
+  #     if len(bad_solutions) > bad_sol_thresh:
+  #       pass
+  #     else:
+  #       bad_solutions.append(a_chrom)
+  #   else:
+  #     if len(good_solutions) > good_sol_thresh:
+  #       pass
+  #     else:
+  #       good_solutions.append(a_chrom)
+  
+  # bad_solutions.append(sorted_mat_chroms[len(sorted_mat_chroms)-1])
+
+  # bad_solutions = sorted_mat_chroms[0:math.floor(len(sorted_mat_chroms)/2)]
+  # good_solutions = sorted_mat_chroms[math.floor(len(sorted_mat_chroms)/2):]
+
+  evaluated_chroms = []
+
+  terminate_search = False
+  pop_search_iter = 1
+
+  has_good_sol = False
+  no_good_sol_counter = 0
+  while not terminate_search:
+    thresh_increase_rate = 1.0
+    print("========================================================={}".format(ti))
+    print("population search iteration: {}".format(pop_search_iter))
+    print("=========================================================")
+
+    do_diff_search = False
+    new_chromosomes = []
+    for i, a_chrom in enumerate(mat_chroms):
+      closest_dis = 19.4  # approximate Euclidean distance between two farthest points in the search space
+      closest_good = False
+      closest_bad = False
+
+      # for j, sol in enumerate(good_solutions):
+      #   if np.all(np.equal(a_chrom, sol)):
+      #     continue
+      #   # calculate Euclidean distance between the two chomosomes
+      #   # source: https://stackoverflow.com/a/50639386
+      #   euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** 0.5
+      #   # if the chromosome is close enough to a good solution, regardless of distance
+      #   # set the good solution as the closest 
+      #   if euclid_dis <= good_sol_radius and euclid_dis < closest_dis:
+      #     closest_dis = euclid_dis
+      #     closest_chrom = sol[1:]
+      #     closest_good = True
+      
+      # # calculate Euclidean distance between current chromosome and good_sol / bad_sol
+      # for j, sol in enumerate(bad_solutions):
+      #   if closest_good:
+      #     break
+      #   if np.all(np.equal(a_chrom, sol)):
+      #     continue
+      #   # calculate Euclidean distance between the two chomosomes
+      #   euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** .5
+      #   # if the chromosome is within radius of a bad solution and the solution is the closest to it,
+      #   # replace with new closest solution, otherwise ignore
+      #   if euclid_dis <= bad_sol_radius and euclid_dis < closest_dis:
+      #     closest_dis = euclid_dis
+      #     closest_chrom = sol[1:]
+      #     closest_bad = True
+      
+      # # used in order to get the gradient intersecting x=0 at 3 and x=radius at a value < 0.5, where radius is the good/bad solution radius
+      # multiply_factor = 3 - closest_dis/2.2
+
+      # if closest_good:
+      #   # apply force to change direction of chromosome towards solution
+      #   force_vec = np.subtract(a_chrom[1:], closest_chrom)
+      #   force_vec = np.multiply(multiply_factor, force_vec)
+      #   # inverse scaling to generate larger force the closer a chromosome is to a solution
+      #   direction_vec[i] = np.add(direction_vec[i], force_vec)
+      #   # np.clip(direction_vec[i], 0, 0.4, out=direction_vec[i])
+      #   new_chrom = np.add(a_chrom[1:], direction_vec[i])
+      # elif closest_bad:
+      #   # apply force to change direction of chromosome away from solution
+      #   force_vec = np.subtract(a_chrom[1:], closest_chrom)
+      #   force_vec *= -1
+      #   force_vec = np.multiply(multiply_factor, force_vec)
+      #   # inverse scaling to generate larger force the closer a chromosome is to a solution
+      #   direction_vec[i] = np.add(direction_vec[i], force_vec)
+      #   # np.clip(direction_vec[i], 0, 0.4, out=direction_vec[i])
+      #   new_chrom = np.add(a_chrom[1:], direction_vec[i])
+      # else:
+      #   # retain trajectory
+      #   new_chrom = np.add(a_chrom[1:], direction_vec[i])
+
+      # ------------------------------------------------------------------
+      # CHANGES MADE
+      # ------------------------------------------------------------------
+      # all good and bad solutions will influence the current chromosome, not just the closest
+      for j, sol in enumerate(good_solutions):
+        if np.all(np.equal(a_chrom, sol)):
+          continue
+        # calculate Euclidean distance between the two chomosomes
+        # source: https://stackoverflow.com/a/50639386
+        euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** 0.5
+        diff_vec = np.subtract(sol[1:], a_chrom[1:])
+        # force_vec = np.multiply(diff_vec, 5/euclid_dis) #?
+        force_vec = np.multiply(diff_vec, 1 - euclid_dis/20)
+        force_ratio = force_vec * (sol[0]/100)
+        direction_vec[i] = np.add(direction_vec[i], force_ratio)
+      
+      for j, sol in enumerate(bad_solutions):
+        if np.all(np.equal(a_chrom, sol)):
+          continue
+        # calculate Euclidean distance between the two chomosomes
+        # source: https://stackoverflow.com/a/50639386
+        euclid_dis = sum((p-q)**2 for p, q in zip(a_chrom[1:], sol[1:])) ** 0.5
+        diff_vec = np.subtract(sol[1:], a_chrom[1:])
+        diff_vec = diff_vec * -1
+        # force_vec = np.multiply(diff_vec, 5/euclid_dis) #?
+        force_vec = np.multiply(diff_vec, 1 - euclid_dis/20)
+        force_ratio = force_vec * (sol[0]/100)
+        direction_vec[i] = np.add(direction_vec[i], force_ratio)
+
+      new_chrom = np.add(a_chrom[1:], direction_vec[i])
+
+      # # ------------------------------------------------------------------
+      # # CHANGES MADE
+      # # ------------------------------------------------------------------
+      # # damping effect - this is to: 
+      # # (1) prevent overflow/underflow of param values,
+      # # (2) allows chromosome to stay in roughly the same area and remain on trajectory (prevent extreme perturbation like in wraparound)
+      # # (3) similar to bounce back, allows chromosome to remain around the intended area, but is more faithful to the trajectory
+      # # (4) prevent getting stuck on search space as np.clip tends to do
+      # for k in range(len(new_chrom)):
+      #   if new_chrom[k] == 1.0:
+      #     new_chrom[k] = 0.99999999999
+      #   elif new_chrom[k] == 0.0:
+      #     new_chrom[k] = 0.00000000001
+      #   elif new_chrom[k] > 1.0:
+      #     new_chrom[k] = new_chrom[k] - direction_vec[i][k]
+      #     adjustment = (1.0 - new_chrom[k]) * 0.5
+      #     new_chrom[k] += adjustment
+      #   elif new_chrom[k] < 0.0:
+      #     new_chrom[k] = new_chrom[k] - direction_vec[i][k]
+      #     adjustment = new_chrom[k] * 0.5
+      #     new_chrom[k] -= adjustment
+
+      np.clip(new_chrom, 0, 0.99999999999, out=new_chrom)
+      new_chromosomes.append(new_chrom)
+    
+    if len(new_chromosomes) <= 2 or no_good_sol_counter >= 3:
+      new_chromosomes = [gen_rand_chromosome(num_chrom_param) for i in range(meta['min_pop_size']-1)]
+      direction_vec = [(np.random.rand(num_chrom_param)*0.2)-0.1 for i in range(meta['min_pop_size']-1)]
+      no_good_sol_counter = 0
+
+    # test validation accuracy of new chromosomes
+    new_res, evaluated_chroms = eval_chromosomes(new_chromosomes, num_chrom_params)
+    if new_res[0] > best_res[0]:
+      thresh_increase_rate += (new_res[0] - best_res[0])/5
+      best_res = new_res
+    
+    good_chroms_list = []
+    bad_chroms_ind = []
+    for i, a_chrom in enumerate(evaluated_chroms):
+      # if solution generated is worse or equal to the threshold
+      if a_chrom[0] <= accuracy_thresh:
+        bad_chroms_ind.append(i)
+        # # perform differential search when in a potentially bad solution
+        # new_chrom = differential_search_v1(a_chrom, good_solutions, bad_solutions, num_chrom_params)
+        # evaluated_chroms[i] = new_chrom
+
+        if len(bad_solutions) >= bad_sol_thresh:
+          bad_solutions[bad_solutions.index(max(bad_solutions))] = a_chrom.tolist()
+        else:
+          bad_solutions.append(a_chrom.tolist())
+      else:
+        has_good_sol = True
+        # perform local search when in a potentially good solution
+        new_chrom = local_search_v2(a_chrom, max(good_solutions), num_chrom_params)
+        good_chroms_list.append(new_chrom)
+
+        if len(good_solutions) >= good_sol_thresh:
+          good_solutions[good_solutions.index(min(good_solutions))] = new_chrom.tolist()
+        else:
+          good_solutions.append(new_chrom.tolist())
+      
+      accuracy_thresh += thresh_increase_rate
+      thresh_increase_rate = 0.0
+    
+    if not has_good_sol:
+      # increase good solution radius, decrease bad solution radius
+      good_sol_radius /= 0.9
+      bad_sol_radius *= 0.9
+      no_good_sol_counter += 1
+    else:
+      # reset radius
+      good_sol_radius = 6
+      bad_sol_radius = 6
+    
+    good_chroms = []
+    for i in evaluated_chroms:
+      good_chroms.append(i.tolist())
+    good_chroms = sorted(good_chroms, reverse=True)[0:len(good_chroms_list)]
+    new_direction_vec = []
+    for i in good_chroms:
+      new_direction_vec.append(direction_vec[evaluated_chroms.tolist().index(i)])
+    direction_vec = new_direction_vec
+
+    # if population is below a certain number of chroms, add the new chromosomes into the population
+    if len(mat_chroms) < meta['min_pop_size']:
+      increase_pop = True
+    else:
+      increase_pop = False
+    # diff_chromosomes = differential_search_v3(evaluated_chroms, bad_chroms_ind, good_solutions, bad_solutions, increase_pop, num_chrom_params)
+    diff_chromosomes = differential_search_v4(evaluated_chroms, bad_chroms_ind, good_solutions, increase_pop, num_chrom_params)
+    # if len(good_solutions) > 2:
+    #   diff_chromosomes = differential_search_v4(evaluated_chroms, bad_chroms_ind, good_solutions, increase_pop, num_chrom_params)
+    # else:
+    #   diff_chromosomes = mutate_chroms(good_chroms_list)
+
+    # if len(good_chroms_list) == 0:
+    #   good_chroms_list = [good_chroms_list]
+    mat_chroms = good_chroms_list + diff_chromosomes
+    for i in range(len(diff_chromosomes)):
+      direction_vec.append((np.random.rand(num_chrom_params)*0.2)-0.1)
+    
+    has_good_sol = False
+    thresh_increase_rate += 1
+
+    print('======================================{}'.format(ti))
+    print('Best accuracy so far: {}'.format(best_res[0]))
+    print('======================================')
+
+    pop_search_iter += 1
       
 
   # -----------------------------------------------------------------------------------------------------------
@@ -1112,13 +1821,17 @@ for ti in range(trials):
   print('=====================================')
   print('Model with best validation accuracy: ')
   accur_valid, test_loss = final_test(best_validation_model)
-  # all_average_loss[0].append(test_loss.item())
+  all_average_loss[0].append(test_loss.item())
   print('Model at the end of training: ')
   accur_final, test_loss = final_test(best_final_model)
-  # all_average_loss[1].append(test_loss.item())
+  all_average_loss[1].append(test_loss.item())
 
   # max_accur = int(max(accur_valid, accur_final))
   # print("The max accuracy is: {}".format(max_accur))
+
+  # best_models_list.append(best_validation_model)
+  # best_chromosomes_list.append(best_chromosome)
+  # best_train_params_list.append(best_training_params)
 
   all_accur_valid.append(accur_valid)
   all_accur_final.append(accur_final)
@@ -1127,18 +1840,24 @@ valid_accuracies = [i.item() for i in all_accur_valid]
 final_accuracies = [i.item() for i in all_accur_final]
 print("All valid accuracies: {}".format(valid_accuracies))
 print("All final accuracies: {}".format(final_accuracies))
+print("All average validation loss: {}".format(all_average_loss[0]))
 
 print("Mean accuracy:         {}".format(np.mean(valid_accuracies)))
 print("Standard deviation:    {}".format(np.std(valid_accuracies)))
 print("Minimum accuracy:      {}".format(min(valid_accuracies)))
 print("1st Quartile accuracy: {}".format(np.percentile(valid_accuracies, 25)))
-print("Median accuracy:       {}".format(np.percentile(valid_accuracies, 50)))
+print("Median accuracy:       {}".format(np.median(valid_accuracies)))
 print("3rd Quartile accuracy: {}".format(np.percentile(valid_accuracies, 75)))
 print("Maximum accuracy:      {}".format(max(valid_accuracies)))
 print("Interquartile range:   {}".format(np.percentile(valid_accuracies, 75) - np.percentile(valid_accuracies, 25)))
 print("Total time taken: {}".format((time.time()-starting_time)))
 
 print("Do eval calls per trial: {}".format(do_eval_iter))
+# print("Take previous: {}".format(testing['take_previous']))
+# print("Take random: {}".format(testing['take_random']))
+# print("All best models: {}".format(best_models_list))
+# print("All best chromosomes: {}".format(best_chromosomes_list))
+# print("All best training parameters: {}".format(best_train_params_list))
 # print("Population search iterations per trial: {}".format(pop_search_iter))
 # print("Local search iterations per trial: {}".format(local_search_iter))
 # print("Differential search iterations per trial: {}".format(diff_search_iter))

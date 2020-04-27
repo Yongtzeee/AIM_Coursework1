@@ -915,7 +915,7 @@ import math
 
 # --- Architectural search parameters
 meta = {}
-meta['max_rs_iter'] = 10 # 6 # 10  # initial random search
+meta['max_rs_iter'] = 6 # 6 # 10  # initial random search
 meta['max_shc_iter'] = 20 # 40 # 20 # 40  # stochastic hill climbing iterations
 meta['num_differential_sol'] = 4 # 8 # number of differential evolution solutions
 meta['diff_lr'] = 0.4 # 0.5 # 0.1 # learning rate for differential search
@@ -1633,6 +1633,12 @@ def local_search(a_chrom, prev_chrom, num_chrom_params, pop_search_iter):
 
   # return chrom_result # np.concatenate(([best_res[0]], best_res[1]))
 
+def mutate_chromosome(a_chrom, num_chrom_params):
+  for i in range(num_chrom_params):
+    if random.random() < 0.2:
+      a_chrom[i] = random.random()
+  return a_chrom
+
 
 # -----------------------------------------------------------------------------
 # final evaluation functions
@@ -1711,7 +1717,10 @@ for ti in range(trials):
     num_chrom_param = comp_num_chrom_param(limits)
 
     # a_rand_chrom = gen_rand_chromosome(num_chrom_param)
-    a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for i in range(num_chrom_param)])
+    if rsi == 0 or rsi == 1:
+      a_rand_chrom = np.asarray([0.99999999999 for i in range(num_chrom_param)])
+    else:
+      a_rand_chrom = np.asarray([rsi/meta['max_rs_iter'] for i in range(num_chrom_param)])
 
     # --- Actual training
     model, train_params = prepare_model(a_rand_chrom)
@@ -1938,6 +1947,7 @@ for ti in range(trials):
           adjustment = new_chrom[k] * 0.5
           new_chrom[k] -= adjustment
 
+      new_chrom = mutate_chromosome(new_chrom, num_chrom_params)
       new_chromosomes.append(new_chrom)
     
     # test validation accuracy of new chromosomes
